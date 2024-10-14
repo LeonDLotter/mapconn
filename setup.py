@@ -24,6 +24,7 @@ setup(
         'joblib',
         'tqdm',        
         'scipy',
+        'setuptools',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
