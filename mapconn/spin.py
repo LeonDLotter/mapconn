@@ -156,8 +156,8 @@ def match_coord_sets(coords1, coords2):
 
 class VolSpin:
 
-    def __init__(self, data, coords=None, distmat=None):
-               
+    def __init__(self, data, coords=None, distmat=None, verbose=True):
+        
         # check data
         if not isinstance(data, (np.ndarray, pd.DataFrame, pd.Series, list)):
             raise ValueError("Data must be a numpy array, pandas DataFrame, pandas Series, or list")
@@ -194,7 +194,7 @@ class VolSpin:
         self._data = data
         self._coords = coords
         self._distmat = distmat
-        
+        self._verbose = verbose
     def fit(self, center=None, radius=None, num_points=100):
         
         # get coords if not provided
@@ -218,11 +218,11 @@ class VolSpin:
         # keep only sphere points with an associated parcel
         self._sphere_coords_data = self._sphere_coords[self._data_idc_in_sphere]
         
-    def transform(self, n_perm=10, seed=None, n_jobs=1):
-
+    def transform(self, n_perm=1000, seed=None, n_jobs=1):
+        
         # rotation fun
         def perm_fun(data=self._data, data_coords=self._coords, 
-                     sphere_coords_data=self._sphere_coords_data, center=self._center):
+                     sphere_coords_data=self._sphere_coords_data, center=self._center, seed=seed):
             # set random state
             rng = np.random.RandomState(seed)
             
@@ -238,8 +238,8 @@ class VolSpin:
             
         # run
         data_perm = Parallel(n_jobs=n_jobs)(
-            delayed(perm_fun)() 
-            for _ in tqdm(range(n_perm))
+            delayed(perm_fun)(seed=(seed+i**2 if seed is not None else None)) 
+            for i in tqdm(range(n_perm), disable=not self._verbose)
         )
         self._data_perm = np.stack([d[0] for d in data_perm], axis=0)
         self._sphere_coords_data_perm = np.stack([d[1] for d in data_perm], axis=0)
