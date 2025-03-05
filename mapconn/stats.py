@@ -58,7 +58,18 @@ def _calc_mapconn_stats(mapconn_curves, stats="all", force_dict=False):
                 auc, 
                 axis=1, 
                 arr=curve, 
-                percentiles=percentiles
+                percentiles=percentiles,
+                square_curve=False
+            )
+            
+        # AUC square
+        if "auc_square" in stats:
+            out["auc_square"][m] = np.apply_along_axis(
+                auc, 
+                axis=1, 
+                arr=curve, 
+                percentiles=percentiles,
+                square_curve=True
             )
             
         # Peak connectivity
@@ -81,7 +92,7 @@ def _calc_mapconn_stats(mapconn_curves, stats="all", force_dict=False):
         return out
       
         
-def auc(curve, percentiles):
+def auc(curve, percentiles, square_curve=False):
     
     if not isinstance(curve, (pd.Series, np.ndarray)):
         raise ValueError(f"curve must be a pandas Series or numpy array, got {type(curve)}")
@@ -91,6 +102,11 @@ def auc(curve, percentiles):
         raise ValueError(f"curve and percentiles must have the same length, got {len(curve)} and {len(percentiles)}")
     
     curve = np.array(curve)
+    if square_curve:
+        curve = np.tanh(curve)
+        curve = curve**2
     percentiles = np.array(percentiles)
     
     return np.trapz(curve - curve[percentiles==0], x=percentiles)
+
+        

@@ -2,8 +2,8 @@ import numpy as np
 from nilearn.connectome import sym_matrix_to_vec
 import sklearn.covariance as skcov
 
-def _get_matrix_calculator(method="EmpiricalCovariance", kind="covariance", normalize=True, 
-                           kwargs={}, dtype=float, verbose=False):
+def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", normalize=True, 
+                          dtype=float, verbose=False, **kwargs):
     """
     Get a function to calculate a covariance matrix from standardized time series data. 
     Input to the returned function is a timeseries array with shape (n_timepoints, n_parcels).
@@ -70,6 +70,7 @@ def _get_matrix_calculator(method="EmpiricalCovariance", kind="covariance", norm
 def _covariance_to_pearson(covariance_matrix):
     std = np.sqrt(np.diag(covariance_matrix))
     cor_matrix = covariance_matrix / np.outer(std, std)
+    np.fill_diagonal(cor_matrix, 1)
     return cor_matrix
 
 def _precision_to_partial_pearson(precision_matrix):
