@@ -101,11 +101,17 @@ def auc(curve, percentiles, square_curve=False):
     if not len(curve) == len(percentiles):
         raise ValueError(f"curve and percentiles must have the same length, got {len(curve)} and {len(percentiles)}")
     
+    # handle curve
     curve = np.array(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
     if square_curve:
         curve = np.tanh(curve)
         curve = curve**2
+        
+    # handle percentiles
     percentiles = np.array(percentiles)
+    percentiles = percentiles[~isnan]
     
     return np.trapz(curve - curve[percentiles==0], x=percentiles)
 
