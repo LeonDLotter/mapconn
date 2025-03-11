@@ -437,6 +437,8 @@ class MapConnNull:
                  mapconn_null_stats_dist=None,
                  mapconn_pvalues=None,
                  mapconn_pvalues_norm=None,
+                 mapconn_pvalues_indiv=None,
+                 mapconn_pvalues_indiv_norm=None,
                  n_nulls=None,
                  n_jobs=-1,
                  dtype=np.float32,
@@ -452,6 +454,8 @@ class MapConnNull:
         self._mapconn_null_stats_dist = mapconn_null_stats_dist
         self._mapconn_pvalues = mapconn_pvalues
         self._mapconn_pvalues_norm = mapconn_pvalues_norm
+        self._mapconn_pvalues_indiv = mapconn_pvalues_indiv
+        self._mapconn_pvalues_indiv_norm = mapconn_pvalues_indiv_norm
         self._dtype = dtype
         self._n_jobs = n_jobs
         
@@ -464,7 +468,10 @@ class MapConnNull:
         if get_stats:
             self.get_stats()
         if get_pvalues:
-            self.get_pvalues()
+            self.get_pvalues(p_from_mean=True)
+            self.get_pvalues(p_from_mean=False)
+            self.get_pvalues(p_from_mean=True, norm=True)
+            self.get_pvalues(p_from_mean=False, norm=True)
         if get_dist:
             self.get_null_stats_dist()
             self.get_null_curves_dist()
@@ -672,7 +679,14 @@ class MapConnNull:
             n_jobs = self._n_jobs
             
         # get stored pvalues (can be None)
-        pvalues = self._mapconn_pvalues if not norm else self._mapconn_pvalues_norm
+        if p_from_mean and not norm:
+            pvalues = self._mapconn_pvalues
+        elif p_from_mean and norm:
+            pvalues = self._mapconn_pvalues_norm
+        elif not p_from_mean and not norm:
+            pvalues = self._mapconn_pvalues_indiv
+        elif not p_from_mean and norm:
+            pvalues = self._mapconn_pvalues_indiv_norm
         
         # check if recalculate is needed
         if pvalues is None or recalculate or (any(stat not in pvalues.keys() for stat in stats)):
@@ -725,6 +739,7 @@ class MapConnNull:
                     
                 # calculate p-values in parallel
                 maps = mapconn_stats[stat].columns
+                print("Maps: ", maps)
                 ids = mapconn_stats[stat].index if not p_from_mean else [f"mean_{stat}"]
                 pvalues_stat = Parallel(n_jobs=n_jobs)(
                     delayed(null_to_p)(
@@ -733,8 +748,9 @@ class MapConnNull:
                         tail=tail,
                         fit_norm=norm
                     )
-                    for i_m, m in enumerate(maps)
                     for i_idx, idx in enumerate(ids)
+                    for i_m, m in enumerate(maps)
+                    
                 )
                 
                 # store
@@ -745,10 +761,14 @@ class MapConnNull:
                 )
                 
             # store
-            if norm:
-                self._mapconn_pvalues_norm = pvalues
-            else:
+            if p_from_mean and not norm:
                 self._mapconn_pvalues = pvalues
+            elif p_from_mean and norm:
+                self._mapconn_pvalues_norm = pvalues
+            elif not p_from_mean and not norm:
+                self._mapconn_pvalues_indiv = pvalues
+            elif not p_from_mean and norm:
+                self._mapconn_pvalues_indiv_norm = pvalues
         
         # return
         if not force_dict:
@@ -760,6 +780,8 @@ class MapConnNull:
     def _ensure_results(self):
         self.get_pvalues()
         self.get_pvalues(norm=True)
+        self.get_pvalues(p_from_mean=False)
+        self.get_pvalues(p_from_mean=False, norm=True)
         self.get_null_curves_dist()
         self.get_null_stats_dist()
     
@@ -852,7 +874,7 @@ class MapConnNull:
                 "parc_idc_lh": None,
                 "parc_idc_rh": None,
                 "parc_idc_sc": None,
-                "cx_sc_minmax_scale": True,
+                "cx_sc_minmax_scale": False,
             } | kwargs
             map_data_null, distmat = generate_null_maps(
                 data=map_data,
@@ -947,8 +969,9 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
     else:
         mappct_data = None
     mappct_masks_flat_arr = np.array(mappct_masks_flat)
+
         
-    # mean after applying quantile thresholds
+    # mean after applying percentile thresholds
     mapconn = Parallel(n_jobs=n_jobs)(
         delayed(_threshold_conn_data)(conn_data_flat, mappct_masks_flat_arr[map_idx, :]) 
         for map_idx 
@@ -971,6 +994,12 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
 
 def _threshold_conn_data(conn_data_flat, bool_vector):
     conn_data_thresh = conn_data_flat[:, bool_vector]
-    conn_data_thresh = np.nanmean(conn_data_thresh, axis=1)
-    return conn_data_thresh
+    # rows with not only nans
+    valid_rows = ~np.all(np.isnan(conn_data_thresh), axis=1)
+    # results array
+    result = np.full(conn_data_thresh.shape[0], np.nan)
+    # calculate mean for valid rows
+    result[valid_rows] = np.nanmean(conn_data_thresh[valid_rows], axis=1)
+    return result
+
 
