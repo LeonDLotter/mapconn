@@ -870,7 +870,8 @@ class MapConnNull:
         if map_data_null is None:
             null_kwargs = {
                 "method": "moran",
-                "lr_mirror_dist_mat": False,
+                "lr_mirror_dist_mat": True,
+                "lr_mirror_null_maps": False,
                 "parc_idc_lh": None,
                 "parc_idc_rh": None,
                 "parc_idc_sc": None,
