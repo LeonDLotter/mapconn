@@ -31,6 +31,7 @@ class MapConn:
                  mapconn_curves=None,
                  parcel_labels=None,
                  n_parcels=None,
+                 conn_aggregation="mean",
                  r_to_z=False,
                  mapconn_stats=None,
                  n_jobs=-1,
@@ -50,6 +51,7 @@ class MapConn:
         self._n_jobs = n_jobs
         self._mapconn_stats = mapconn_stats
         self._dtype = dtype
+        self._conn_agg = conn_aggregation   
         
         # input validation of dtype
         # if dtype == np.float16:
@@ -266,7 +268,7 @@ class MapConn:
     @classmethod
     def from_flat_matrix(cls, flat_connectivity_matrices, map_data=None, map_data_is_pct=False, flat_mappercentile_masks=None, 
                          matrix_ids=None, parcel_labels=None, r_to_z=False, percentiles=np.arange(0, 100, 5),
-                         mappercentile_threshold="overequal", n_jobs=-1, verbose=True, dtype=np.float32):
+                         mappercentile_threshold="overequal", conn_aggregation="mean", n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Create an instance of MAPCONN from flattened connectivity matrices.
         """
@@ -304,6 +306,7 @@ class MapConn:
             map_data=map_data,
             map_data_is_pct=map_data_is_pct,
             r_to_z=r_to_z,
+            conn_agg=conn_aggregation,
             percentiles=percentiles,
             mappercentile_threshold=mappercentile_threshold,
             return_mappct=True,
@@ -320,6 +323,7 @@ class MapConn:
                    n_parcels=len(parcel_labels),
                    map_data=map_data if not map_data_is_pct else None,
                    mappct_data=mappct_data,
+                   conn_aggregation=conn_aggregation,
                    r_to_z=r_to_z,
                    n_jobs=n_jobs,
                    dtype=dtype,
@@ -328,8 +332,7 @@ class MapConn:
     @classmethod
     def from_matrix(cls, connectivity_matrices, map_data=None, map_data_is_pct=False, flat_mappercentile_masks=None, 
                     matrix_ids=None, parcel_labels=None, r_to_z=False, percentiles=np.arange(0, 100, 5),
-                    mappercentile_threshold="overequal",
-                    n_jobs=-1, verbose=True, dtype=np.float32):
+                    mappercentile_threshold="overequal", conn_aggregation="mean", n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Estimate mapFC from connectivity matrices.
         """
@@ -362,6 +365,7 @@ class MapConn:
                                     flat_mappercentile_masks=flat_mappercentile_masks,
                                     percentiles=percentiles,
                                     mappercentile_threshold=mappercentile_threshold,
+                                    conn_aggregation=conn_aggregation,
                                     parcel_labels=parcel_labels,
                                     n_jobs=n_jobs,
                                     verbose=verbose,
@@ -371,7 +375,7 @@ class MapConn:
     @classmethod
     def from_timeseries(cls, timeseries_data, map_data=None, map_data_is_pct=False, flat_mappercentile_masks=None, 
                         connectivity_estimator='correlation', zscore=True, timeseries_ids=None, parcel_labels=None,
-                        percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal",
+                        percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal", conn_aggregation="mean",
                         n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Estimate mapconn from time series data.
@@ -416,6 +420,7 @@ class MapConn:
                                map_data=map_data,
                                map_data_is_pct=map_data_is_pct,
                                flat_mappercentile_masks=flat_mappercentile_masks,
+                               conn_aggregation=conn_aggregation,
                                percentiles=percentiles,
                                mappercentile_threshold=mappercentile_threshold,
                                parcel_labels=parcel_labels,
@@ -739,7 +744,6 @@ class MapConnNull:
                     
                 # calculate p-values in parallel
                 maps = mapconn_stats[stat].columns
-                print("Maps: ", maps)
                 ids = mapconn_stats[stat].index if not p_from_mean else [f"mean_{stat}"]
                 pvalues_stat = Parallel(n_jobs=n_jobs)(
                     delayed(null_to_p)(
@@ -866,6 +870,9 @@ class MapConnNull:
         # get percentiles
         percentiles = mapconn_instance._percentiles
         
+        # aggregation method
+        conn_agg = mapconn_instance._conn_agg
+        
         # get null data
         if map_data_null is None:
             null_kwargs = {
@@ -904,9 +911,10 @@ class MapConnNull:
                 return_mappct=False,
                 return_df=False,
                 r_to_z=r_to_z,
+                conn_agg=conn_agg,
                 n_jobs=1, 
                 verbose=False,
-                dtype=dtype
+                dtype=dtype,
             )
             for map_data_null_i 
             in tqdm(map_data_null, disable=not verbose, desc="Calculating null mapconn curves")
@@ -926,7 +934,7 @@ class MapConnNull:
 
 # mapconn curves
 def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct=False, mappct_masks_flat=None, 
-                      r_to_z=False, percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal",
+                      r_to_z=False, percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal", conn_agg="mean",
                       return_mappct=False, return_df=True, n_jobs=-1, verbose=True, dtype=np.float32):
     
     conn_data_flat = np.array(flat_connectivity_matrices, dtype=dtype)
@@ -972,9 +980,16 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
     mappct_masks_flat_arr = np.array(mappct_masks_flat)
 
         
-    # mean after applying percentile thresholds
+    # mean/median after applying percentile thresholds
+    if conn_agg == "mean":
+        threshold_fun = _threshold_conn_data_mean
+    elif conn_agg == "median":
+        threshold_fun = _threshold_conn_data_median
+    else:
+        raise ValueError(f"conn_agg must be 'mean' or 'median', got {conn_agg}")
+    # run thresholding/aggregation in parallel
     mapconn = Parallel(n_jobs=n_jobs)(
-        delayed(_threshold_conn_data)(conn_data_flat, mappct_masks_flat_arr[map_idx, :]) 
+        delayed(threshold_fun)(conn_data_flat, mappct_masks_flat_arr[map_idx, :]) 
         for map_idx 
         in tqdm(range(mappct_masks_flat_arr.shape[0]), disable=not verbose, desc="Calculating mapConn curves")
     )
@@ -993,7 +1008,7 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
     return mapconn if not return_mappct else (mapconn, mappct_data, mappct_masks_flat)
 
 
-def _threshold_conn_data(conn_data_flat, bool_vector):
+def _threshold_conn_data_mean(conn_data_flat, bool_vector):
     conn_data_thresh = conn_data_flat[:, bool_vector]
     # rows with not only nans
     valid_rows = ~np.all(np.isnan(conn_data_thresh), axis=1)
@@ -1001,6 +1016,16 @@ def _threshold_conn_data(conn_data_flat, bool_vector):
     result = np.full(conn_data_thresh.shape[0], np.nan)
     # calculate mean for valid rows
     result[valid_rows] = np.nanmean(conn_data_thresh[valid_rows], axis=1)
+    return result
+
+def _threshold_conn_data_median(conn_data_flat, bool_vector):
+    conn_data_thresh = conn_data_flat[:, bool_vector]
+    # rows with not only nans
+    valid_rows = ~np.all(np.isnan(conn_data_thresh), axis=1)
+    # results array
+    result = np.full(conn_data_thresh.shape[0], np.nan)
+    # calculate median for valid rows
+    result[valid_rows] = np.nanmedian(conn_data_thresh[valid_rows], axis=1)
     return result
 
 
