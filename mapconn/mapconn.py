@@ -9,7 +9,9 @@ from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 from nilearn.connectome import vec_to_sym_matrix
 from nispace.nulls import generate_null_maps
-from nispace.stats.misc import null_to_p
+from nispace.stats.misc import null_to_p, permute_groups
+from nispace.stats.effectsize import cohen_paired
+from scipy.stats import ttest_rel
 
 from .matrix import (_get_matrix_estimator, _vectorize_sym_matrices,
                      _n_sym_matrix_tri_elem_from_shape, _sym_matrix_shape_from_n_tri_elem)
@@ -32,6 +34,7 @@ class MapConn:
                  parcel_labels=None,
                  n_parcels=None,
                  conn_aggregation="mean",
+                 mappct_thresh="overequal",
                  r_to_z=False,
                  mapconn_stats=None,
                  n_jobs=-1,
@@ -52,6 +55,7 @@ class MapConn:
         self._mapconn_stats = mapconn_stats
         self._dtype = dtype
         self._conn_agg = conn_aggregation   
+        self._mappct_thresh = mappct_thresh
         
         # input validation of dtype
         # if dtype == np.float16:
@@ -323,6 +327,7 @@ class MapConn:
                    n_parcels=len(parcel_labels),
                    map_data=map_data if not map_data_is_pct else None,
                    mappct_data=mappct_data,
+                   mappct_thresh=mappercentile_threshold, 
                    conn_aggregation=conn_aggregation,
                    r_to_z=r_to_z,
                    n_jobs=n_jobs,
@@ -427,6 +432,324 @@ class MapConn:
                                n_jobs=n_jobs,
                                verbose=verbose,
                                dtype=dtype)
+        
+
+class MapConnInverse:
+    """
+    Class for the mapconn inverse test.
+    """
+    
+    def __init__(self, 
+                 mapconn_instance=None,
+                 mapconn_inverse_instance=None,
+                 mapconn_pvalues_perm=None,
+                 mapconn_pvalues_perm_norm=None,
+                 mapconn_pvalues_ttest=None,
+                 n_jobs=-1,
+                 n_perm=10000,
+                 dtype=np.float32,
+                 get_stats=False,
+                 get_pvalues=False):
+        
+        self._mapconn_instance = mapconn_instance
+        self._mapconn_inverse_instance = mapconn_inverse_instance
+        self._mapconn_pvalues_perm = mapconn_pvalues_perm
+        self._mapconn_pvalues_perm_norm = mapconn_pvalues_perm_norm
+        self._mapconn_pvalues_ttest = mapconn_pvalues_ttest
+        self._dtype = dtype
+        self._n_jobs = n_jobs
+        self._n_perm = n_perm
+        
+        # precompute
+        if get_stats:
+            self.get_stats()
+        if get_pvalues:
+            self.get_pvalues(permutation=True, norm=False, n_perm=n_perm)
+            self.get_pvalues(permutation=True, norm=True, n_perm=n_perm)
+            self.get_pvalues(permutation=False)
+         
+    def get_original(self):
+        """ 
+        Returns the mapconn instance stored in the instance.
+        """
+        return self._mapconn_instance
+    
+    def get_inverse(self):
+        """
+        Returns the mapconn inverse instance stored in the instance.
+        """
+        return self._mapconn_inverse_instance
+    
+    def get_map_data(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_map_data() for details.
+        """
+        return self._mapconn_instance.get_map_data(**kwargs)
+    
+    def get_connectivity_matrices(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_connectivity_matrices() for details.
+        """
+        return self._mapconn_instance.get_connectivity_matrices(**kwargs)
+    
+    def get_mappercentile_masks(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_mappercentile_masks() for details.
+        """
+        return self._mapconn_instance.get_mappercentile_masks(**kwargs)
+    
+    def get_curves(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_curves() for details.
+        """
+        return self._mapconn_instance.get_curves(**kwargs)
+    
+    def get_stats(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_stats() for details.
+        """
+        return self._mapconn_instance.get_stats(**kwargs)
+    
+    def get_inverse_curves(self, **kwargs):
+        """
+        Passed through to the inverse mapconn instance. See MapConn.get_curves() for details.
+        """
+        return self._mapconn_inverse_instance.get_curves(**kwargs)
+    
+    def get_inverse_stats(self, **kwargs):
+        """
+        Passed through to the inverse mapconn instance. See MapConn.get_stats() for details.
+        """
+        return self._mapconn_inverse_instance.get_stats(**kwargs)
+    
+    def get_pvalues(self, stats="auc", maps=None, percentiles=None, ids=None, 
+                    permutation=True, norm=False,
+                    n_perm=None, n_jobs=-1, perm_strategy="proportional",
+                    tail="upper", recalculate=False, force_dict=False, seed=None, verbose=False):
+        
+        # check number of fc matrices
+        if len(self._mapconn_instance._ids) < 2:
+            raise ValueError("We need at least two input matrices to compute p-values, because p values "
+                             "are calculated as permutation or paired t-tests between original and inverse curves.")
+        
+        # n_perm
+        if n_perm is None:
+            n_perm = self._n_perm
+            
+        # stats
+        if stats == "all":
+            stats = STATS
+        elif isinstance(stats, (str, int)):
+            stats = [stats]
+            
+        # get stored pvalues (can be None)
+        if permutation:
+            if norm:
+                pvalues = self._mapconn_pvalues_perm_norm
+            else:
+                pvalues = self._mapconn_pvalues_perm
+        else:
+            pvalues = self._mapconn_pvalues_ttest
+        
+        # check if recalculate is needed
+        if pvalues is None or recalculate or (any(stat not in pvalues.keys() for stat in stats)):
+            recalculate = True
+        elif pvalues is not None:
+            # check if all stats and data are available
+            if not all(stat in pvalues.keys() for stat in stats):
+                recalculate = True
+            # get observed mapconn stats for reference
+            mapconn_stats = self._mapconn_instance.get_stats(
+                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
+            )
+            # check if columns are the same
+            if not np.array_equal(pvalues[stats[0]].columns, 
+                                  mapconn_stats[stats[0]].columns):
+                recalculate = True
+        
+        # recalculate if needed
+        if recalculate:
+            pvalues = {}
+            
+            # get original mapconn stats
+            mapconn_stats = self._mapconn_instance.get_stats(
+                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
+            )
+            
+            # get inverse mapconn stats
+            mapconn_inverse_stats = self._mapconn_inverse_instance.get_stats(
+                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
+            )
+            
+            # number of "subjects"
+            n = mapconn_stats[stats[0]].shape[0]
+            
+            if permutation:
+                # "groups"
+                groups = np.concatenate([np.zeros(n), np.ones(n)])
+                subjects = mapconn_stats[stats[0]].index.to_list() + mapconn_stats[stats[0]].index.to_list()
+                
+                # permuted groups            
+                groups_perm = permute_groups(groups, subjects=subjects, paired=True, strategy=perm_strategy,
+                                             n_perm=n_perm, n_proc=n_jobs, seed=seed, verbose=verbose)
+                
+            # iterate over stats
+            for stat in set(stats).intersection(set(mapconn_stats.keys())):
+                
+                # original
+                original = mapconn_stats[stat]
+                # inverse
+                inverse = mapconn_inverse_stats[stat]
+                # maps
+                maps = mapconn_stats[stat].columns
+                
+                # calculate p-values
+                if permutation:
+                    pvalues_stat = pd.DataFrame(
+                        columns=maps,
+                        index=["stat", "p"]
+                    )
+                    # iterate over maps
+                    for m in tqdm(maps, desc="Calculating p-values"):
+                        # data
+                        data = np.concatenate([original[m].values, inverse[m].values])
+                        # observed 
+                        d_observed = cohen_paired(data[groups == 0], data[groups == 1])
+                        # null
+                        d_null = [
+                            cohen_paired(data[g == 0], data[g == 1])
+                            for g in groups_perm
+                        ]
+                        # p-value
+                        pvalues_stat.loc["stat", m] = d_observed
+                        pvalues_stat.loc["p", m] = null_to_p(test_value=d_observed, null_array=d_null, tail=tail)
+                else:
+                    # ttest
+                    ttest = ttest_rel(
+                        original, 
+                        inverse, 
+                        axis=0, 
+                        nan_policy="raise", 
+                        alternative="greater" if tail == "upper" else "less" if tail == "lower" else "two-sided"
+                    )
+                    # result
+                    pvalues_stat = pd.DataFrame(
+                        {
+                            "stat": ttest.statistic,
+                            "p": ttest.pvalue
+                        },
+                        index=maps
+                    ).T
+                    
+                # store
+                pvalues[stat] = pvalues_stat
+                    
+            # store
+            if permutation:
+                if norm:
+                    self._mapconn_pvalues_perm_norm = pvalues
+                else:
+                    self._mapconn_pvalues_perm = pvalues
+            else:
+                self._mapconn_pvalues_ttest = pvalues
+            
+        # return
+        if not force_dict:
+            if len(pvalues.keys()) == 1:
+                pvalues = pvalues[stats[0]]
+                
+        return pvalues
+    
+    def _ensure_results(self):
+        self.get_pvalues(permutation=True, norm=False)
+        self.get_pvalues(permutation=True, norm=True)
+        self.get_pvalues(permutation=False)
+    
+    def save(self, path, ensure_results=True):
+        """
+        Pickle the mapconn instance to a file.
+        """
+        
+        path = Path(path)
+        save_gzip = path.suffix == ".gz"
+        if save_gzip:
+            with gzip.open(path, "wb", compresslevel=9) as f:
+                pickle.dump(self, f)
+        else:
+            with open(path, "wb") as f:
+                pickle.dump(self, f)
+                
+    @classmethod
+    def load(cls, path):
+        """
+        Load the mapconn instance from a pickled file.
+        """
+        path = Path(path)
+        save_gzip = path.suffix == ".gz"
+        if save_gzip:
+            with gzip.open(path, "rb") as f:
+                return pickle.load(f)
+        else:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        
+    @classmethod
+    def from_mapconn(cls, mapconn_instance, map_data_inverse=None,
+                     verbose=True, dtype=None, n_jobs=None, 
+                     get_stats=True, get_pvalues=True, n_perm=10000):
+        """
+        Create a MapConnInverse instance from an "observed" MapConn instance.
+        """
+        
+        # checks
+        if not isinstance(mapconn_instance, MapConn):
+            raise ValueError("mapconn_instance must be a MapConn instance")
+        if not hasattr(mapconn_instance, "_map_data"):
+            raise ValueError("mapconn_instance must have original map data stored in ._map_data")
+        
+        # get map data
+        map_data = mapconn_instance.get_map_data(pct=False)
+        
+        # dtype
+        if dtype is None:
+            dtype = mapconn_instance._dtype
+            
+        # n_jobs
+        if n_jobs is None:
+            n_jobs = mapconn_instance._n_jobs
+            
+        # inverse map data
+        if map_data_inverse is None:
+            map_data = map_data.T
+            map_data_mean = map_data.mean()
+            map_data_inverse = (map_data - map_data_mean) * (-1) + map_data_mean
+            map_data_inverse = map_data_inverse.T      
+            
+        # run
+        mapconn_inverse = MapConn.from_flat_matrix(
+            flat_connectivity_matrices=mapconn_instance.get_connectivity_matrices(flat=True),
+            map_data=map_data_inverse,
+            map_data_is_pct=False,
+            matrix_ids=mapconn_instance._ids,
+            parcel_labels=mapconn_instance._parcel_labels,
+            r_to_z = mapconn_instance._r_to_z,
+            conn_aggregation=mapconn_instance._conn_agg,
+            percentiles=mapconn_instance._percentiles,
+            mappercentile_threshold=mapconn_instance._mappct_thresh,
+            n_jobs=n_jobs,
+            verbose=verbose,
+            dtype=dtype
+        )
+        
+        # return
+        return cls(mapconn_instance=mapconn_instance,
+                   mapconn_inverse_instance=mapconn_inverse,
+                   n_jobs=n_jobs,
+                   dtype=dtype,
+                   n_perm=n_perm,
+                   get_stats=get_stats,
+                   get_pvalues=get_pvalues)
+        
         
 class MapConnNull:
     """
@@ -831,7 +1154,7 @@ class MapConnNull:
         
     @classmethod
     def from_mapconn(cls, mapconn_instance, map_data_null=None, 
-                      parcellation=None, parcellation_space="mni152", distmat=None, 
+                      parcellation=None, parcellation_space="mni152", distmat=None, l2rmap=None,
                       n_nulls=1000, n_jobs=None, seed=None, verbose=True, dtype=None, 
                       get_stats=True, get_pvalues=True, get_dist=True, **kwargs):
         """
@@ -873,6 +1196,9 @@ class MapConnNull:
         # aggregation method
         conn_agg = mapconn_instance._conn_agg
         
+        # map percentile threshold
+        mappct_thresh = mapconn_instance._mappct_thresh
+        
         # get null data
         if map_data_null is None:
             null_kwargs = {
@@ -912,6 +1238,7 @@ class MapConnNull:
                 return_df=False,
                 r_to_z=r_to_z,
                 conn_agg=conn_agg,
+                mappercentile_threshold=mappct_thresh,
                 n_jobs=1, 
                 verbose=False,
                 dtype=dtype,

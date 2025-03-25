@@ -1,1 +1,1 @@
-from .mapconn import MapConn, MapConnNull
+from .mapconn import MapConn, MapConnNull, MapConnInverse
