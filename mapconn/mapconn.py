@@ -622,7 +622,8 @@ class MapConnInverse:
                         ]
                         # p-value
                         pvalues_stat.loc["stat", m] = d_observed
-                        pvalues_stat.loc["p", m] = null_to_p(test_value=d_observed, null_array=d_null, tail=tail)
+                        pvalues_stat.loc["p", m] = null_to_p(test_value=d_observed, null_array=d_null, 
+                                                             tail=tail, fit_norm=norm)
                 else:
                     # ttest
                     ttest = ttest_rel(
@@ -1154,8 +1155,8 @@ class MapConnNull:
         
     @classmethod
     def from_mapconn(cls, mapconn_instance, map_data_null=None, 
-                      parcellation=None, parcellation_space="mni152", distmat=None, l2rmap=None,
-                      n_nulls=1000, n_jobs=None, seed=None, verbose=True, dtype=None, 
+                      parcellation=None, parcellation_space="mni152", distmat=None,
+                      n_nulls=1000, n_jobs=None, seed=None, verbose=True, null_verbose=False, dtype=None, 
                       get_stats=True, get_pvalues=True, get_dist=True, **kwargs):
         """
         Create a MapConnNull instance from an "observed" MapConn instance.
@@ -1167,9 +1168,14 @@ class MapConnNull:
         - cx_sc_minmax_scale: scale subcortical and cortical parcels independently to range in observed map data
         """
         
-        # checks
-        if not isinstance(mapconn_instance, MapConn):
-            raise ValueError("mapconn_instance must be a MapConn instance")
+        # checks and handle MapConnInverse
+        if not isinstance(mapconn_instance, (MapConn, MapConnInverse)):
+            raise ValueError("mapconn_instance must be a MapConn or MapConnInverse instance")
+        elif isinstance(mapconn_instance, MapConnInverse):
+            mapconn_instance_input = mapconn_instance
+            mapconn_instance = mapconn_instance.get_original()
+        else:
+            mapconn_instance_input = mapconn_instance
         if not hasattr(mapconn_instance, "_map_data"):
             raise ValueError("mapconn_instance must have original map data stored in ._map_data")
         if parcellation is None and distmat is None and map_data_null is None:
@@ -1205,6 +1211,7 @@ class MapConnNull:
                 "method": "moran",
                 "lr_mirror_dist_mat": False,
                 "lr_mirror_null_maps": False,
+                "l2rmap": None,
                 "parc_idc_lh": None,
                 "parc_idc_rh": None,
                 "parc_idc_sc": None,
@@ -1218,7 +1225,7 @@ class MapConnNull:
                 n_nulls=n_nulls,
                 seed=seed,
                 n_proc=n_jobs,
-                verbose=False,
+                verbose=null_verbose,
                 dtype=dtype,
                 **null_kwargs
             )
@@ -1248,7 +1255,7 @@ class MapConnNull:
         )
         
         # return
-        return cls(mapconn_instance=mapconn_instance,
+        return cls(mapconn_instance=mapconn_instance_input,
                    map_data_null=map_data_null,
                    mapconn_null_curves=mapconn_null_curves,  
                    n_nulls=n_nulls,
