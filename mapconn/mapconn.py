@@ -12,7 +12,7 @@ from nispace.nulls import generate_null_maps
 from nispace.stats.misc import null_to_p, permute_groups
 from nispace.stats.effectsize import cohen_paired
 from scipy.stats import ttest_rel
-
+import xarray as xr
 from .matrix import (_get_matrix_estimator, _vectorize_sym_matrices,
                      _n_sym_matrix_tri_elem_from_shape, _sym_matrix_shape_from_n_tri_elem)
 from .percentiles import _calc_mappct_masks
@@ -387,14 +387,19 @@ class MapConn:
         """
         
         # input validation
-        if isinstance(timeseries_data, (np.ndarray, pd.DataFrame)):
-            timeseries_data = [timeseries_data]
-        if timeseries_data[0].ndim != 2:
-            raise ValueError("timeseries_data must be a (list of) 2D array(s)")
         if parcel_labels is None:
             if isinstance(timeseries_data, pd.DataFrame):
                 parcel_labels = timeseries_data.columns.to_list()
-            
+            elif isinstance(timeseries_data[0], pd.DataFrame):
+                parcel_labels = timeseries_data[0].columns.to_list()
+        if isinstance(timeseries_data, (np.ndarray, pd.DataFrame, xr.DataArray)):
+            if timeseries_data.ndim == 1 or timeseries_data.ndim > 3:
+                raise ValueError("timeseries_data must be a 2D or 3D array")
+            elif timeseries_data.ndim == 2:
+                timeseries_data = [np.array(timeseries_data)]
+            elif timeseries_data.ndim == 3:
+                timeseries_data = [np.array(timeseries_data[i,:,:]) for i in range(timeseries_data.shape[0])]
+        
         # z standardize
         if zscore:
             timeseries_data = [(timeseries_data[i] - np.mean(timeseries_data[i])) / np.std(timeseries_data[i]) 
@@ -524,7 +529,7 @@ class MapConnInverse:
     
     def get_pvalues(self, stats="auc", maps=None, percentiles=None, ids=None, 
                     permutation=True, norm=False,
-                    n_perm=None, n_jobs=-1, perm_strategy="proportional",
+                    n_perm=None, n_jobs=-1, perm_strategy="proportional", 
                     tail="upper", recalculate=False, force_dict=False, seed=None, verbose=False):
         
         # check number of fc matrices
@@ -584,7 +589,10 @@ class MapConnInverse:
             # number of "subjects"
             n = mapconn_stats[stats[0]].shape[0]
             
-            if permutation:
+            # prep permutation
+            if permutation is True:
+                permutation = "label"
+            if permutation == "label":
                 # "groups"
                 groups = np.concatenate([np.zeros(n), np.ones(n)])
                 subjects = mapconn_stats[stats[0]].index.to_list() + mapconn_stats[stats[0]].index.to_list()
@@ -592,7 +600,10 @@ class MapConnInverse:
                 # permuted groups            
                 groups_perm = permute_groups(groups, subjects=subjects, paired=True, strategy=perm_strategy,
                                              n_perm=n_perm, n_proc=n_jobs, seed=seed, verbose=verbose)
-                
+            elif permutation == "sign":
+                rng = np.random.RandomState(seed)
+                signs_perm = [rng.choice([-1, 1], size=n) for _ in range(n_perm)]
+            
             # iterate over stats
             for stat in set(stats).intersection(set(mapconn_stats.keys())):
                 
@@ -611,19 +622,33 @@ class MapConnInverse:
                     )
                     # iterate over maps
                     for m in tqdm(maps, desc="Calculating p-values"):
-                        # data
-                        data = np.concatenate([original[m].values, inverse[m].values])
-                        # observed 
-                        d_observed = cohen_paired(data[groups == 0], data[groups == 1])
-                        # null
-                        d_null = [
-                            cohen_paired(data[g == 0], data[g == 1])
-                            for g in groups_perm
-                        ]
+                        
+                        if permutation == "label":
+                            # data
+                            data = np.concatenate([original[m].values, inverse[m].values])
+                            # observed 
+                            d_observed = cohen_paired(data[groups == 0], data[groups == 1])
+                            # null
+                            d_null = [
+                                cohen_paired(data[g == 0], data[g == 1])
+                                for g in groups_perm
+                            ]
+                            
+                        elif permutation == "sign":
+                            # observed
+                            diff = original[m].values - inverse[m].values
+                            d_observed = np.mean(diff) / np.std(diff, ddof=1)
+                            
+                            # null
+                            d_null = [
+                                np.mean(diff * s) / np.std(diff * s, ddof=1)
+                                for s in signs_perm
+                            ]
+                            
                         # p-value
                         pvalues_stat.loc["stat", m] = d_observed
                         pvalues_stat.loc["p", m] = null_to_p(test_value=d_observed, null_array=d_null, 
-                                                             tail=tail, fit_norm=norm)
+                                                            tail=tail, fit_norm=norm)
                 else:
                     # ttest
                     ttest = ttest_rel(
@@ -842,6 +867,11 @@ class MapConnNull:
         return self._mapconn_instance.get_stats(**kwargs)
     
     def get_null_curves(self, maps=None, percentiles=None, ids=None, return_df=True, remove_global=True):
+        if self._mapconn_null_curves is None:
+            raise AttributeError(
+                "No null curves found! Have they been deleted from the instance?\n"
+                "Try `.get_null_curves_dist()` to obtain distribution statistics for null curves."
+                "Or try `.get_null_stats_dist()` to obtain distribution statistics for null stats.")
         obs_full = self._mapconn_instance.get_curves(remove_global=False)
         obs_sel = self._mapconn_instance.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)
         row_idc_full = obs_full.index.to_list()

@@ -4,21 +4,22 @@ import pandas as pd
 import numpy as np
 
 
-def plot_mapconn_curve(mfc_obs=None, mfc_null=None, ax=None,
+def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
                        errorbar=("pi", 90), label="Sample mean (90% PI)", color="tab:red", alpha=1, lw=2,
                        errorbar_kws=None,
                        plot_individual=True, ind_color="k", ind_alpha=0.1, ind_lw=0.5,
                        xlabel="Percentile", ylabel="FC", title=None, legend=False):
     
     #  validate input
-    if mfc_obs is None and mfc_null is None:
-        raise ValueError("Provide either mfc_obs or mfc_null, or both.")
-    if mfc_obs is not None:
-        if not isinstance(mfc_obs, (pd.DataFrame, pd.Series)):
-            raise ValueError("Provide mfc_obs as 1D or 2D pd array.")
-    if mfc_null is not None:
-        if not isinstance(mfc_null, list):
-            raise ValueError("Provide mfc_null as list of pd arrays.")
+    if curves_obs is None and curves_null is None:
+        raise ValueError("Provide either curves_obs or curves_null, or both.")
+    if curves_obs is not None:
+        if not isinstance(curves_obs, (pd.DataFrame, pd.Series)):
+            raise ValueError("Provide curves_obs as 1D or 2D pd array.")
+    if curves_null is not None:
+        if not isinstance(curves_null, (list, pd.DataFrame)):
+            raise ValueError("Provide curves_null as list of pd arrays or a single pd array with "
+                             "null distribution statistics.")
 
     # ax
     if ax is None:
@@ -27,18 +28,18 @@ def plot_mapconn_curve(mfc_obs=None, mfc_null=None, ax=None,
     # title
     if title is None:
         try:
-            title = mfc_obs.columns.get_level_values(0).unique()[0]
+            title = curves_obs.columns.get_level_values(0).unique()[0]
         except:
             title = None
     elif title in [False, ""]:
         title = None
         
     # observed
-    if mfc_obs is not None:
+    if curves_obs is not None:
         
         # plot mean curve
         sn.lineplot(
-            data=mfc_obs.melt(ignore_index=False).dropna(),
+            data=curves_obs.melt(ignore_index=False).dropna(),
             x="pct",
             y="value",
             ax=ax,
@@ -52,10 +53,10 @@ def plot_mapconn_curve(mfc_obs=None, mfc_null=None, ax=None,
         
         # plot individual curves
         if plot_individual:
-            for i in range(len(mfc_obs.index)):
+            for i in range(len(curves_obs.index)):
                 ax.plot(
-                    mfc_obs.columns.get_level_values(-1),
-                    mfc_obs.values[i,:],
+                    curves_obs.columns.get_level_values(-1),
+                    curves_obs.values[i,:],
                     c=ind_color,
                     lw=ind_lw,
                     alpha=ind_alpha,
@@ -63,28 +64,41 @@ def plot_mapconn_curve(mfc_obs=None, mfc_null=None, ax=None,
                 )
                 
     # null
-    if mfc_null is not None:
-        mfc_null_means = pd.concat([null.mean(axis=0) for null in mfc_null], axis=1).T
+    if curves_null is not None:
+        if isinstance(curves_null, list):     
+            curves_null_means = pd.concat([null.mean(axis=0) for null in curves_null], axis=1).T   
+            curves_null_stats = {
+                f"{100 * q:0f}%": np.quantile(curves_null_means, q, axis=0)
+                for q in [0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99]
+            }
+            percentiles = curves_null_means.columns.get_level_values(-1)
+        else:
+            curves_null_stats = {
+                p: curves_null.loc[p, :]
+                for p in ["1%", "10%", "25%", "50%", "75%", "90%", "99%"]
+            }   
+            percentiles = curves_null.columns.get_level_values(-1)
+        
         ax.plot(
-            mfc_null_means.columns.get_level_values(-1),
-            np.quantile(mfc_null_means, 0.5, axis=0),
+            percentiles,
+            curves_null_stats["50%"],
             color="0.3",
             alpha=1,
             lw=lw,
             label=f"Median of null means",
             zorder=-1000
         )
-        for q, c in [(0.25, "0.7"), (0.10, "0.8"), (0.01, "0.9")]:
+        for p1, p2, c in [("1%", "99%", "0.9"), ("10%", "90%", "0.8"), ("25%", "75%", "0.7")]:
             ax.fill_between(
-                mfc_null_means.columns.get_level_values(-1),
-                np.quantile(mfc_null_means, q, axis=0),
-                np.quantile(mfc_null_means, 1-q, axis=0),
+                percentiles,
+                curves_null_stats[p1],
+                curves_null_stats[p2],
                 color=c,
                 alpha=1,
-                label=f"{(1-q) * 100:.0f}% PI of null means",
-                zorder=-1001 + q
+                label=f"{p2} PI of null means",
+                zorder=-1001
             )
-            
+                
     # labels
     ax.set_title(title, weight="semibold")
     ax.set_ylabel(ylabel)
@@ -97,17 +111,18 @@ def plot_mapconn_curve(mfc_obs=None, mfc_null=None, ax=None,
 
 
 
-def plot_mapconn_curves(mfc_obs=None, mfc_null=None, maps=None,
+def plot_mapconn_curves(curves_obs=None, curves_null=None, maps=None,
                         fig=None, axes=None, inset_axes=None, n_cols=6, figsize=None, sharex=True, sharey=False, y_lims=None,
                         titles=True,
                         colors=None, legend="row",
                         plot_kws={}):
     
     #  validate input
-    if mfc_obs is None and mfc_null is None:
-        raise ValueError("Provide either mfc_obs or mfc_null, or both.")
-    if not isinstance(mfc_obs, (pd.DataFrame, pd.Series)):
-        raise ValueError("Provide mfc_obs as 1D or 2D pd array.")
+    if curves_obs is None and curves_null is None:
+        raise ValueError("Provide either curves_obs or curves_null, or both.")
+    if curves_obs is not None:
+        if not isinstance(curves_obs, (pd.DataFrame, pd.Series)):
+            raise ValueError("Provide curves_obs as 1D or 2D pd array.")
     if inset_axes is not None:
         if axes is None:
             raise ValueError("Provide axes if inset_axes is used.")
@@ -116,7 +131,7 @@ def plot_mapconn_curves(mfc_obs=None, mfc_null=None, maps=None,
 
     # get maps
     if maps is None:
-        maps = mfc_obs.columns.get_level_values(0).unique().tolist()
+        maps = curves_obs.columns.get_level_values(0).unique().tolist()
     elif isinstance(maps, str):
         maps = [maps]
     
@@ -166,9 +181,17 @@ def plot_mapconn_curves(mfc_obs=None, mfc_null=None, maps=None,
                 ax = inset_axes[r * n_cols + c]
             ax.set_box_aspect(1)
             
+            curves_obs_m = curves_obs.loc[:, (m, slice(None))]
+            if curves_null is None:
+                curves_null_m = None
+            elif isinstance(curves_null, list):
+                curves_null_m = [null.loc[:, (m, slice(None))] for null in curves_null]
+            else:
+                curves_null_m = curves_null.loc[:, (m, slice(None))]
+            
             plot_mapconn_curve(
-                mfc_obs=mfc_obs.loc[:, (m, slice(None))],
-                mfc_null=([null.loc[:, (m, slice(None))] for null in mfc_null]) if mfc_null is not None else None,
+                curves_obs=curves_obs_m,
+                curves_null=curves_null_m,
                 ax=ax,
                 **dict(
                     legend=legend,
