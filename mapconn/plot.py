@@ -7,7 +7,8 @@ import numpy as np
 def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
                        errorbar=("pi", 90), label="Sample mean (90% PI)", color="tab:red", alpha=1, lw=2,
                        errorbar_kws=None,
-                       plot_individual=True, ind_color="k", ind_alpha=0.1, ind_lw=0.5,
+                       plot_individual=True, ind_color=None, ind_alpha=0.1, ind_lw=0.5,
+                       zorder_mean=1000,
                        xlabel="Percentile", ylabel="FC", title=None, legend=False):
     
     #  validate input
@@ -48,7 +49,8 @@ def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
             label=label,
             alpha=alpha,
             lw=lw,
-            err_kws=errorbar_kws
+            err_kws=errorbar_kws,
+            zorder=zorder_mean
         )
         
         # plot individual curves
@@ -57,10 +59,10 @@ def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
                 ax.plot(
                     curves_obs.columns.get_level_values(-1),
                     curves_obs.values[i,:],
-                    c=ind_color,
+                    c=ind_color if ind_color is not None else color,
                     lw=ind_lw,
                     alpha=ind_alpha,
-                    zorder=-100
+                    zorder=zorder_mean-1
                 )
                 
     # null
