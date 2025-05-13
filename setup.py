@@ -17,7 +17,7 @@ setup(
         'nibabel',
         'nilearn',
         'pingouin',
-        'nispace @ git+https://github.com/leondlotter/nispace@3954c889d62512c32e07c2fc122ec6bee6a3ca6b',
+        'nispace @ git+https://github.com/leondlotter/nispace@5470ca5cb68d8cce3100a014d1a4adfb32f92306',
         'brainsmash',
         'brainspace',
         'scikit-learn',
