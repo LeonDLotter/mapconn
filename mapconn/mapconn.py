@@ -860,6 +860,14 @@ class MapConnNull:
         """
         return self._mapconn_instance.get_curves(**kwargs)
     
+    def get_inverse_curves(self, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConnInverse.get_inverse_curves() for details.
+        """
+        if not isinstance(self._mapconn_instance, MapConnInverse):
+            raise ValueError("mapconn_instance must be a MapConnInverse instance")
+        return self._mapconn_instance.get_inverse_curves(**kwargs)
+    
     def get_stats(self, **kwargs):
         """
         Passed through to the observed mapconn instance. See MapConn.get_stats() for details.
@@ -870,7 +878,7 @@ class MapConnNull:
         if self._mapconn_null_curves is None:
             raise AttributeError(
                 "No null curves found! Have they been deleted from the instance?\n"
-                "Try `.get_null_curves_dist()` to obtain distribution statistics for null curves."
+                "Try `.get_null_curves_dist()` to obtain distribution statistics for null curves.\n"
                 "Or try `.get_null_stats_dist()` to obtain distribution statistics for null stats.")
         obs_full = self._mapconn_instance.get_curves(remove_global=False)
         obs_sel = self._mapconn_instance.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)
@@ -1192,10 +1200,14 @@ class MapConnNull:
         Create a MapConnNull instance from an "observed" MapConn instance.
         Arguments to modify null generation:
         - lr_mirror_dist_mat: mirror distance matrix across left and right hemispheres
-        - parc_idc_lh: indices of left hemisphere parcels
-        - parc_idc_rh: indices of right hemisphere parcels
-        - parc_idc_sc: indices of subcortical parcels
+        - lr_mirror_null_maps: mirror null maps across left and right hemispheres
+        - match_interhemi_correlation: match interhemispheric correlation of null maps to observed maps
         - cx_sc_minmax_scale: scale subcortical and cortical parcels independently to range in observed map data
+        - parc_idc_lh: indices of left hemisphere parcels, necessary for above arguments 1-3
+        - parc_idc_rh: indices of right hemisphere parcels, necessary for above arguments 1-3
+        - parc_idc_sc: indices of subcortical parcels, necessary for above arguments 4
+        - l2rmap: left-to-right mapping for parcellation, necessary for above arguments 2-3 in case of non-symmetric parcellation
+        - parc_symmetric: whether parcellation is symmetric, set to True to enable above arguments 1-3 without l2rmap
         """
         
         # checks and handle MapConnInverse
@@ -1241,6 +1253,7 @@ class MapConnNull:
                 "method": "moran",
                 "lr_mirror_dist_mat": False,
                 "lr_mirror_null_maps": False,
+                "match_interhemi_correlation": False,
                 "l2rmap": None,
                 "parc_idc_lh": None,
                 "parc_idc_rh": None,
