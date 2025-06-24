@@ -46,3 +46,12 @@ def _construct_flat_label_pairs(labels, discard_diagonal=True):
     idc = np.tril_indices(len(labels), -1 if discard_diagonal else 0)
     return [(labels[i], labels[j]) for i, j in zip(*idc)]
 
+def reduce_df_index(df):
+    if not isinstance(df, (pd.DataFrame, pd.Series)):
+        raise ValueError("df must be a pandas DataFrame or Series")
+    
+    idc_one_level = [i for i in df.index.names if df.index.get_level_values(i).nunique() == 1]
+    df = df.droplevel(idc_one_level)
+    
+    return df
+
