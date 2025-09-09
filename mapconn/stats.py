@@ -18,7 +18,7 @@ def _remove_global(mapconn_curves):
     return df
 
 
-def _calc_mapconn_stats(mapconn_curves, stats="all", force_dict=False):
+def _calc_mapconn_stats(mapconn_curves, stats="all", remove_global=True, force_dict=False):
     """
     Calculate statistics from mapconn curves.
     """
@@ -46,35 +46,48 @@ def _calc_mapconn_stats(mapconn_curves, stats="all", force_dict=False):
     
     # percentiles
     percentiles = np.array(mapconn_curves.columns.get_level_values(-1).unique())
+    percentiles = percentiles / 100
     
     # calculate stats
     out = {stat: pd.DataFrame(index=ids, columns=maps) for stat in stats}
     stats_pct = [stat for stat in stats if stat in percentiles]
     for m, curve in curves_mapwise.items():
-    
+        
+        # remove global
+        if remove_global:
+            curve = curve - curve.values[:, percentiles==0]
+            
         # AUC
         if "auc" in stats:
             out["auc"][m] = np.apply_along_axis(
-                auc, 
+                fast_auc, 
                 axis=1, 
                 arr=curve, 
                 percentiles=percentiles,
-                square_curve=False
             )
-            
+        
         # AUC square
-        if "auc_square" in stats:
-            out["auc_square"][m] = np.apply_along_axis(
-                auc, 
+        if "auc2" in stats:
+            out["auc2"][m] = np.apply_along_axis(
+                fast_auc2, 
                 axis=1, 
                 arr=curve, 
                 percentiles=percentiles,
-                square_curve=True
             )
             
+        # 2nd degree polynomial fit
+        if "poly2" in stats:
+            out["poly2"][m] = np.apply_along_axis(
+                poly,
+                axis=1,
+                arr=curve,
+                percentiles=percentiles,
+                degree=2,
+            )
+                        
         # Peak connectivity
         if "peak_conn" in stats:
-            out["peak_conn"][m] = curve.max(axis=1) - curve.loc[:, 0]
+            out["peak_conn"][m] = curve.max(axis=1)
             
         # Peak percentile
         if "peak_pct" in stats:
@@ -83,7 +96,7 @@ def _calc_mapconn_stats(mapconn_curves, stats="all", force_dict=False):
         # Connectivity at percentile
         if stats_pct:
             for pct in stats_pct:
-                out[pct][m] = curve.loc[:, pct] - curve.loc[:, 0]
+                out[pct][m] = curve.loc[:, pct]
     
     # return
     if len(out) == 1 and not force_dict:
@@ -101,18 +114,45 @@ def auc(curve, percentiles, square_curve=False):
     if not len(curve) == len(percentiles):
         raise ValueError(f"curve and percentiles must have the same length, got {len(curve)} and {len(percentiles)}")
     
+    if square_curve:
+        return fast_auc2(curve, percentiles)
+    else:
+        return fast_auc(curve, percentiles)
+    
+def fast_auc(curve, percentiles):
     # handle curve
-    curve = np.array(curve)
+    curve = np.asarray(curve)
     isnan = np.isnan(curve)
     curve = curve[~isnan]
-    if square_curve:
-        curve = np.tanh(curve)
-        curve = curve**2
-        
+   
     # handle percentiles
-    percentiles = np.array(percentiles)
+    percentiles = np.asarray(percentiles)
     percentiles = percentiles[~isnan]
     
-    return np.trapz(curve - curve[percentiles==0], x=percentiles)
+    return np.trapz(curve, x=percentiles)
 
-        
+def fast_auc2(curve, percentiles):
+    # handle curve
+    curve = np.asarray(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
+    curve = np.tanh(curve)
+    curve = curve**2 * np.sign(curve)
+    
+    # handle percentiles
+    percentiles = np.asarray(percentiles)
+    percentiles = percentiles[~isnan]
+
+    return np.trapz(curve, x=percentiles)
+    
+def poly(curve, percentiles, degree=2):
+    # handle curve
+    curve = np.asarray(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
+    
+    # handle percentiles
+    percentiles = np.asarray(percentiles)
+    percentiles = percentiles[~isnan]
+    
+    return np.polyfit(percentiles, curve, degree)[0]

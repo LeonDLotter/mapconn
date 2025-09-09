@@ -1,4 +1,5 @@
 
+from idna import valid_contexto
 import numpy as np
 import pandas as pd
 import pickle
@@ -10,12 +11,13 @@ from nilearn.connectome import vec_to_sym_matrix
 from nispace.nulls import generate_null_maps
 from nispace.stats.misc import null_to_p, permute_groups
 from nispace.stats.effectsize import cohen_paired
-from scipy.stats import ttest_rel
+from scipy.stats import ttest_rel, median_abs_deviation
 from itertools import product
 import xarray as xr
 
 from .matrix import (_get_matrix_estimator, _vectorize_sym_matrices,
-                     _n_sym_matrix_tri_elem_from_shape, _sym_matrix_shape_from_n_tri_elem)
+                     _n_sym_matrix_tri_elem_from_shape, _sym_matrix_shape_from_n_tri_elem,
+                     matrix_sac)
 from .percentiles import _calc_mappct_masks
 from .utils import _construct_flat_label_pairs, _mappct_flat_to_parcels, reduce_df_index
 from .stats import _calc_mapconn_stats, _remove_global
@@ -207,7 +209,8 @@ class MapConn:
         maps = maps if maps is not None else self._maps
         return map_data.loc[maps]
     
-    def get_stats(self, stats="auc", maps=None, percentiles=None, ids=None, recalculate=False, force_dict=False):
+    def get_stats(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, recalculate=False, 
+                  force_dict=False):
         """
         Returns the mapconn stats.
         """
@@ -223,7 +226,7 @@ class MapConn:
         # maybe recalculate
         elif mapconn_stats is not None:
             # get mapconn curves for reference
-            mapconn_curves = self.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)    
+            mapconn_curves = self.get_curves(maps=maps, percentiles=percentiles, ids=ids)    
             # check if all stats and data are available
             if not all(stat in mapconn_stats.keys() for stat in stats):
                 recalculate = True
@@ -236,8 +239,10 @@ class MapConn:
                 
         if recalculate:
             mapconn_curves = self.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)
-            mapconn_stats = _calc_mapconn_stats(mapconn_curves, stats=stats, force_dict=True)
+            mapconn_stats = _calc_mapconn_stats(mapconn_curves, stats=stats, force_dict=True, remove_global=True)
             self._mapconn_stats = mapconn_stats
+        else:
+            mapconn_stats = {stat: mapconn_stats[stat] for stat in stats}
             
         if not force_dict:
             if len(mapconn_stats.keys()) == 1:
@@ -245,7 +250,8 @@ class MapConn:
         
         return mapconn_stats
     
-    def get_loo(self, what="parcels", stats="auc", maps=None, percentiles=None, ids=None, 
+    def get_loo(self, what="parcels", stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, 
+                relative_difference=False,
                 recalculate=False, force_dict=False, n_jobs=-1, verbose=True, **kwargs):
         """
         Returns the regional importance of parcels or connections based on leave-one-out analysis.
@@ -352,6 +358,12 @@ class MapConn:
         
         # save
         self._loo[loo_key] = loo_dfs
+        
+        # relative difference
+        if relative_difference:
+            print(loo_dfs["auc"])
+            print(mapconn_stats["auc"].rename_axis(index="id"))
+            loo_dfs = {stat: loo_dfs[stat] / mapconn_stats[stat].rename_axis(index="id") for stat in stats}
             
         # return
         if not force_dict:
@@ -359,7 +371,21 @@ class MapConn:
                 loo_dfs = loo_dfs[stats[0]]
         return loo_dfs
     
-    def get_summary(self, level="group", stats="auc", maps=None, percentiles=None, ids=None,
+    def get_matrix_sac(self, distmat, ids=None, **kwargs):
+        """
+        Returns the spatial autocorrelation of the connectivity matrices.
+        """
+        if distmat is None:
+            raise ValueError("Need distance matrix to calculate spatial autocorrelation")
+        if ids is None:
+            ids = self._ids
+        conn_matrices = self.get_connectivity_matrices(ids=ids, flat=False)
+        sac = pd.DataFrame(index=pd.Index(ids, name="id"), columns=["sa_lambda", "sa_infinity"])
+        for i, mat in enumerate(conn_matrices):
+            sac.loc[ids[i], :] = matrix_sac(mat, distmat, **kwargs)
+        return sac
+    
+    def get_summary(self, level="group", stats=["auc", "poly2"], maps=None, percentiles=None, ids=None,
                     agg_stats=["mean", "std", "min", "max"], reduce_index=True):
         """
         Returns concatenated dataframes of all available summary data (no curves).
@@ -414,6 +440,7 @@ class MapConn:
 
     @classmethod
     def from_flat_matrix(cls, flat_connectivity_matrices, map_data=None, map_data_is_pct=False, flat_mappercentile_masks=None, 
+                         map_operations=[],
                          matrix_ids=None, parcel_labels=None, r_to_z=False, percentiles=np.arange(0, 100, 5),
                          mappercentile_threshold="overequal", conn_aggregation="mean", n_jobs=-1, verbose=True, dtype=np.float32):
         """
@@ -711,7 +738,7 @@ class MapConnInverse:
         """
         kwargs["delta"] = True
         kwargs["mapconn_stats"] = self.get_delta_stats(
-            stats=kwargs.get("stats", "auc"),
+            stats=kwargs.get("stats", ["auc", "poly2"]),
             maps=kwargs.get("maps", None),
             percentiles=kwargs.get("percentiles", None),
             ids=kwargs.get("ids", None),
@@ -720,7 +747,13 @@ class MapConnInverse:
         )
         return self._mapconn_instance.get_loo(**kwargs)
     
-    def get_pvalues(self, stats="auc", maps=None, percentiles=None, ids=None, 
+    def get_matrix_sac(self, distmat, ids=None, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_matrix_sac() for details.
+        """
+        return self._mapconn_instance.get_matrix_sac(ids=ids, distmat=distmat, **kwargs)
+    
+    def get_pvalues(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, 
                     permutation=True, norm=False,
                     n_perm=None, n_jobs=-1, perm_strategy="proportional", 
                     tail="upper", recalculate=False, force_dict=False, seed=None, verbose=False):
@@ -873,13 +906,14 @@ class MapConnInverse:
                 self._mapconn_pvalues_ttest = pvalues
             
         # return
+        pvalues = {stat: pvalues[stat] for stat in stats}
         if not force_dict:
             if len(pvalues.keys()) == 1:
                 pvalues = pvalues[stats[0]]
                 
         return pvalues
     
-    def get_summary(self, level="group", stats="auc", maps=None, percentiles=None, ids=None,
+    def get_summary(self, level="group", stats=["auc", "poly2"], maps=None, percentiles=None, ids=None,
                     agg_stats=["mean", "std", "min", "max"], reduce_index=True):
         """
         Returns concatenated dataframes of all available summary data (no curves).
@@ -960,7 +994,7 @@ class MapConnInverse:
     @classmethod
     def from_mapconn(cls, mapconn_instance, map_data_inverse=None,
                      verbose=True, dtype=None, n_jobs=None, 
-                     get_stats=True, get_pvalues=True, n_perm=10000):
+                     get_stats=True, get_pvalues=False, n_perm=10000):
         """
         Create a MapConnInverse instance from an "observed" MapConn instance.
         """
@@ -1019,7 +1053,7 @@ class MapConnInverse:
                          matrix_ids=None, parcel_labels=None, r_to_z=False, percentiles=np.arange(0, 100, 5),
                          mappercentile_threshold="overequal", conn_aggregation="mean", 
                          map_data_inverse=None,
-                         get_stats=True, get_pvalues=True, n_perm=10000,
+                         get_stats=True, get_pvalues=False, n_perm=10000,
                          n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Create an instance of MapConnInverse from flattened connectivity matrices.
@@ -1059,7 +1093,7 @@ class MapConnInverse:
                     matrix_ids=None, parcel_labels=None, r_to_z=False, percentiles=np.arange(0, 100, 5),
                     mappercentile_threshold="overequal", conn_aggregation="mean", 
                     map_data_inverse=None,
-                    get_stats=True, get_pvalues=True, n_perm=10000,
+                    get_stats=True, get_pvalues=False, n_perm=10000,
                     n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Create an instance of MapConnInverse from connectivity matrices.
@@ -1100,7 +1134,7 @@ class MapConnInverse:
                         timeseries_ids=None, parcel_labels=None, percentiles=np.arange(0, 100, 5),
                         mappercentile_threshold="overequal", conn_aggregation="mean", 
                         map_data_inverse=None,
-                        get_stats=True, get_pvalues=True, n_perm=10000,
+                        get_stats=True, get_pvalues=False, n_perm=10000,
                         n_jobs=-1, verbose=True, dtype=np.float32):
         """
         Create an instance of MapConnInverse from time series data.
@@ -1148,9 +1182,11 @@ class MapConnNull:
                  mapconn_null_curves=None, 
                  mapconn_null_curves_dist=None,
                  mapconn_null_stats=None,
-                 mapconn_null_stats_dist=None,
+                 mapconn_null_stats_dist_group=None,
+                 mapconn_null_stats_dist_indiv=None,
                  mapconn_pvalues=None,
                  n_nulls=None,
+                 distmat=None,
                  n_jobs=-1,
                  dtype=np.float32,
                  get_results=False):
@@ -1160,8 +1196,10 @@ class MapConnNull:
         self._mapconn_null_curves = mapconn_null_curves
         self._mapconn_null_curves_dist = mapconn_null_curves_dist
         self._mapconn_null_stats = mapconn_null_stats
-        self._mapconn_null_stats_dist = mapconn_null_stats_dist
+        self._mapconn_null_stats_dist_group = mapconn_null_stats_dist_group
+        self._mapconn_null_stats_dist_indiv = mapconn_null_stats_dist_indiv
         self._mapconn_pvalues = mapconn_pvalues if mapconn_pvalues is not None else {}
+        self._distmat = distmat
         self._dtype = dtype
         self._n_jobs = n_jobs
         
@@ -1169,7 +1207,8 @@ class MapConnNull:
         self._mapconn_inverse_null_curves = None
         self._mapconn_inverse_null_stats = None
         self._mapconn_pvalues_delta = None
-        self._mapconn_delta_null_stats_dist = None
+        self._mapconn_delta_null_stats_dist_group = None
+        self._mapconn_delta_null_stats_dist_indiv = None
         
         # n nulls
         if n_nulls is None:
@@ -1178,7 +1217,7 @@ class MapConnNull:
         
         # precompute
         if get_results:
-            self._ensure_results()
+            self._ensure_results(include_delta=isinstance(self._mapconn_instance, MapConnInverse))
          
     def get_observed(self):
         """ 
@@ -1337,8 +1376,8 @@ class MapConnNull:
         return self._mapconn_null_curves_dist.loc[dist_stats, (maps, percentiles)]
     
     
-    def get_null_stats(self, stats="auc", maps=None, percentiles=None, ids=None, recalculate=False, force_dict=False,
-                       inverse=False):
+    def get_null_stats(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, recalculate=False, 
+                       force_dict=False, inverse=False, multilevel_index=False, remove_global=True):
         if isinstance(stats, (str, int)):
             stats = [stats]
         if not inverse:
@@ -1350,7 +1389,7 @@ class MapConnNull:
             recalculate = True
         elif mapconn_null_stats is not None:
             # get mapconn curves for reference
-            mapconn_curves = self._mapconn_instance.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)    
+            mapconn_curves = self._mapconn_instance.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=True)    
             # check if all stats and data are available
             if not all(stat in mapconn_null_stats.keys() for stat in stats):
                 recalculate = True
@@ -1367,7 +1406,7 @@ class MapConnNull:
             mapconn_null_stats = []
             for mapconn_null_curves_i in mapconn_null_curves:
                 mapconn_null_stats.append(
-                    _calc_mapconn_stats(mapconn_null_curves_i, stats=stats, force_dict=True)
+                    _calc_mapconn_stats(mapconn_null_curves_i, stats=stats, force_dict=True, remove_global=remove_global)
                 )
             mapconn_null_stats = {stat: [null[stat] for null in mapconn_null_stats] 
                                   for stat in mapconn_null_stats[0].keys()}
@@ -1377,13 +1416,20 @@ class MapConnNull:
             else:
                 self._mapconn_inverse_null_stats = mapconn_null_stats
             
+        mapconn_null_stats = {stat: mapconn_null_stats[stat] for stat in stats}
+        if multilevel_index:
+            mapconn_null_stats = {
+                stat: pd.concat(mapconn_null_stats[stat], axis=0, 
+                                keys=range(len(mapconn_null_stats[stat])), names=["null", "id"]) 
+                for stat in stats
+            }
         if not force_dict:
             if len(mapconn_null_stats.keys()) == 1:
                 mapconn_null_stats = mapconn_null_stats[stats[0]]
                 
         return mapconn_null_stats
     
-    def get_delta_null_stats(self, stats="auc", maps=None, percentiles=None, ids=None, recalculate=False, force_dict=False):
+    def get_delta_null_stats(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, recalculate=False, force_dict=False):
         """
         """
         # get null stats
@@ -1409,8 +1455,7 @@ class MapConnNull:
                 null_stats_delta = null_stats_delta[stats[0]]
         return null_stats_delta
             
-    
-    def get_null_stats_dist(self, stats="auc", maps=None, percentiles=None, ids=None, recalculate=False, 
+    def get_null_stats_dist(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, recalculate=False, 
                             dist_stats_from_mean=True,
                             dist_stats_quantiles=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99],
                             force_dict=False, null_stats_dict=None):
@@ -1419,13 +1464,25 @@ class MapConnNull:
         if isinstance(stats, (str, int)):
             stats = [stats]
         
-        if self._mapconn_null_stats_dist is None or recalculate or null_stats_dict is not None:
+        if dist_stats_from_mean:
+            mapconn_null_stats_dist = self._mapconn_null_stats_dist_group
+        else:
+            mapconn_null_stats_dist = self._mapconn_null_stats_dist_indiv
+            
+        # check stat
+        if mapconn_null_stats_dist is not None:
+            if not all(stat in mapconn_null_stats_dist.keys() for stat in stats):
+                recalculate = True
+        
+        # run
+        if mapconn_null_stats_dist is None or recalculate or null_stats_dict is not None:
             
             # get null stats
             if null_stats_dict is None:
                 mapconn_null_stats = self.get_null_stats(
                     stats=stats, maps=maps, percentiles=percentiles, ids=ids,
-                    recalculate=recalculate, force_dict=True
+                    recalculate=recalculate == "all", force_dict=True,
+                    
                 )
             else:
                 mapconn_null_stats = null_stats_dict
@@ -1435,39 +1492,57 @@ class MapConnNull:
             maps = mapconn_null_stats[stats[0]][0].columns
             ids = mapconn_null_stats[stats[0]][0].index
             
-            # TODO: implement stats for each id/subject
-            if not dist_stats_from_mean:
-                raise NotImplementedError("dist_stats_from_mean must be True, distribution stats can "
-                                          "currently only be calculated for mean across subjects")
-            
             # calculate null distribution of stats: output is dict per stat with dfs (maps, i)
             null_dist = {}
             for stat in stats:
+                
+                # null data stacked as a numpy array with shape (n_nulls, n_subs, n_maps)
+                null = np.stack(mapconn_null_stats[stat])
 
-                # null across ids
-                null_dist[stat] = (
-                    pd.DataFrame(
-                        np.stack(mapconn_null_stats[stat]).mean(axis=1),
-                        columns=maps,
+                if dist_stats_from_mean:
+                    # null is averaged across ids
+                    null_mean = null.mean(axis=1)
+                    null_dist[stat] = (
+                        pd.DataFrame(null_mean, columns=maps)
+                        .describe(percentiles=dist_stats_quantiles)
+                        .rename_axis(index="variable")
                     )
-                    .describe(percentiles=dist_stats_quantiles)
-                )
+                    null_dist[stat].loc["mad"] = median_abs_deviation(null_mean, axis=0)
+                else:
+                    # null for each id/subject
+                    null_dist[stat] = {}
+                    for i, id in enumerate(ids):
+                        n = null[:, i, :]
+                        null_dist[stat][id] = (
+                            pd.DataFrame(n, columns=maps).describe(percentiles=dist_stats_quantiles)
+                        )
+                        null_dist[stat][id].loc["mad"] = median_abs_deviation(n, axis=0)
+                    null_dist[stat] = pd.concat(null_dist[stat], names=["id", "variable"])
                     
             # store
             if null_stats_dict is None:
-                self._mapconn_null_stats_dist = null_dist
+                if dist_stats_from_mean:
+                    self._mapconn_null_stats_dist_group = null_dist
+                else:
+                    self._mapconn_null_stats_dist_indiv = null_dist
             else:
                 return null_dist
             
         # return
+        if dist_stats_from_mean:
+            mapconn_null_stats_dist = self._mapconn_null_stats_dist_group
+        else:
+            mapconn_null_stats_dist = self._mapconn_null_stats_dist_indiv
         if maps is None:
-            maps = self._mapconn_null_stats_dist[stats[0]].columns    
-        dist_stats = ["count", "mean", "std", "min"] + [f"{q*100}%".replace(".0", "") for q in dist_stats_quantiles] + ["max"]
+            maps = mapconn_null_stats_dist[stats[0]].columns    
+        dist_stats = ["count", "mean", "std", "mad", "min"] + [f"{q*100}%".replace(".0", "") for q in dist_stats_quantiles] + ["max"]
         null_dist = {
-            stat: self._mapconn_null_stats_dist[stat].loc[dist_stats, maps]
+            stat: mapconn_null_stats_dist[stat].loc[dist_stats if dist_stats_from_mean else (slice(None), dist_stats), maps]
             for stat in stats
         }
         
+        # return
+        null_dist = {stat: null_dist[stat] for stat in stats}
         if not force_dict:
             if len(null_dist.keys()) == 1:
                 null_dist = null_dist[stats[0]]
@@ -1475,7 +1550,7 @@ class MapConnNull:
         return null_dist
     
     
-    def get_delta_null_stats_dist(self, stats="auc", maps=None, percentiles=None, ids=None, recalculate=False,
+    def get_delta_null_stats_dist(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, recalculate=False,
                                   dist_stats_from_mean=True, 
                                   dist_stats_quantiles=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99],
                                   force_dict=False):
@@ -1485,12 +1560,17 @@ class MapConnNull:
         if isinstance(stats, (str, int)):
             stats = [stats]
         
-        if self._mapconn_delta_null_stats_dist is None or recalculate:
+        if dist_stats_from_mean:
+            null_stats_delta = self._mapconn_delta_null_stats_dist_group
+        else:
+            null_stats_delta = self._mapconn_delta_null_stats_dist_indiv
+            
+        if null_stats_delta is None or recalculate:
             
             # get null stats
             null_stats_delta = self.get_delta_null_stats(
                 stats=stats, maps=maps, percentiles=percentiles, ids=ids,
-                recalculate=recalculate, force_dict=True)
+                recalculate=recalculate == "all", force_dict=True)
             
             # get null stats dist
             null_stats_dist = self.get_null_stats_dist(
@@ -1500,28 +1580,42 @@ class MapConnNull:
                 recalculate=recalculate, force_dict=True)
             
             # store
-            self._mapconn_delta_null_stats_dist = null_stats_dist
-        
-        else:
-            null_stats_dist = self._mapconn_delta_null_stats_dist
-        
+            if dist_stats_from_mean:
+                self._mapconn_delta_null_stats_dist_group = null_stats_dist
+            else:
+                self._mapconn_delta_null_stats_dist_indiv = null_stats_dist
+                
         # return
+        if dist_stats_from_mean:
+            null_stats_delta = self._mapconn_delta_null_stats_dist_group
+        else:
+            null_stats_delta = self._mapconn_delta_null_stats_dist_indiv
         if maps is None:
-            maps = self._mapconn_delta_null_stats_dist[stats[0]].columns
-        dist_stats = ["count", "mean", "std", "min"] + [f"{q*100}%".replace(".0", "") for q in dist_stats_quantiles] + ["max"]
+            maps = null_stats_delta[stats[0]].columns
+        dist_stats = ["count", "mean", "std", "mad", "min"] + [f"{q*100}%".replace(".0", "") for q in dist_stats_quantiles] + ["max"]
         null_dist = {
-            stat: self._mapconn_delta_null_stats_dist[stat].loc[dist_stats, maps]
+            stat: null_stats_delta[stat].loc[dist_stats if dist_stats_from_mean else (slice(None), dist_stats), maps]
             for stat in stats
         }
         
+        # return
+        null_dist = {stat: null_dist[stat] for stat in stats}
         if not force_dict:
             if len(null_dist.keys()) == 1:
                 null_dist = null_dist[stats[0]]
         
         return null_dist
     
-     
-    def get_pvalues(self, stats="auc", maps=None, percentiles=None, ids=None, p_from_mean=True,
+    def get_matrix_sac(self, distmat=None, ids=None, **kwargs):
+        """
+        Passed through to the observed mapconn instance. See MapConn.get_matrix_sac() for details.
+        If distmat is not provided, the distmat stored in the MapConnNull instance is used.
+        """
+        if distmat is None:
+            distmat = self._distmat
+        return self._mapconn_instance.get_matrix_sac(ids=ids, distmat=distmat, **kwargs)
+    
+    def get_pvalues(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, p_from_mean=True,
                     inverse=False, norm=False, tail="upper", 
                     recalculate=False, n_jobs=None, force_dict=False):
         
@@ -1623,13 +1717,14 @@ class MapConnNull:
             self._mapconn_pvalues[pvalues_key] = pvalues
         
         # return
+        pvalues = {stat: pvalues[stat] for stat in stats}
         if not force_dict:
             if len(pvalues.keys()) == 1:
                 pvalues = pvalues[stats[0]]
                 
         return pvalues
     
-    def get_delta_pvalues(self, stats="auc", maps=None, percentiles=None, ids=None, p_from_mean=True,
+    def get_delta_pvalues(self, stats=["auc", "poly2"], maps=None, percentiles=None, ids=None, p_from_mean=True,
                           verbose=True, tail="two", recalculate=False,
                           n_jobs=None, force_dict=False):
         # TODO: implement get methods
@@ -1649,15 +1744,28 @@ class MapConnNull:
         if any(arg is not None for arg in [maps, percentiles, ids]):
             print("Warning: subsetting might not be implemented correctly for delta p-values")
         
-        # return if already calculated
-        if self._mapconn_pvalues_delta is not None and not recalculate:
-            pvalues = self._mapconn_pvalues_delta
-            stats = list(pvalues.keys())
-            if not force_dict:
-                if len(stats) == 1:
-                    pvalues = pvalues[stats[0]]
-            return pvalues
+        # stats
+        if isinstance(stats, (str, int)):
+            stats = [stats]
         
+        # check if already calculated
+        pvalues = self._mapconn_pvalues_delta
+        if pvalues is not None and not recalculate:
+            
+            # check if all stats and data are available
+            if not all(stat in pvalues.keys() for stat in stats):
+                recalculate = True
+            
+            # TODO: add rest of subsetting checks
+            else:
+                
+                # return
+                pvalues = {stat: pvalues[stat] for stat in set(stats).intersection(pvalues.keys())}
+                if not force_dict:
+                    if len(pvalues.keys()) == 1:
+                        pvalues = pvalues[stats[0]]
+                return pvalues
+            
         # calculate: checks
         if self._map_data_null is None:
             raise ValueError("Null maps not available. Have they been dropped?")
@@ -1674,7 +1782,7 @@ class MapConnNull:
         # get delta
         delta_stats = self._mapconn_instance.get_delta_stats(
             stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True)
-        stats = list(delta_stats.keys())
+        stats = list( set(stats).intersection(delta_stats.keys()) )
         maps = delta_stats[stats[0]].columns
         ids = delta_stats[stats[0]].index
         if percentiles is None:
@@ -1751,13 +1859,14 @@ class MapConnNull:
         self._mapconn_pvalues_delta = pvalues
         
         # return
+        pvalues = {stat: pvalues[stat] for stat in stats}
         if not force_dict:
-            if len(pvalues.keys()) == 1:
+            if len(stats) == 1:
                 pvalues = pvalues[stats[0]]
         return pvalues
     
     
-    def get_summary(self, level="group", stats="auc", maps=None, percentiles=None, ids=None,
+    def get_summary(self, level="group", stats=["auc", "poly2"], maps=None, percentiles=None, ids=None,
                     agg_stats=["mean", "std", "min", "max"], reduce_index=True):
         """
         Returns concatenated dataframes of all available summary data (no curves).
@@ -1799,7 +1908,28 @@ class MapConnNull:
                             .assign(curve_stat=stat, metric=metric, variable=p)
                             .set_index(["curve_stat", "metric", "variable", "id"])
                         )    
-                
+                        
+                    # null distribution
+                    if metric in ["observed", "delta"]:
+                        if metric == "observed":
+                            tmp = self.get_null_stats_dist(
+                                dist_stats_from_mean=False, stats=stat, **get_kwargs) 
+                        else:
+                            try:
+                                tmp = self.get_delta_null_stats_dist(
+                                    dist_stats_from_mean=False, stats=stat, **get_kwargs)
+                            except Exception as e:
+                                # TODO: handle this better
+                                continue
+                        df.append(
+                            tmp
+                            .reset_index() # makes columns: id and variable
+                            .assign(variable=lambda x: "null_" + x.variable,
+                                    curve_stat=stat,
+                                    metric=metric)
+                            .set_index(["curve_stat", "metric", "variable", "id"])
+                        )
+                    
                 # group
                 else:
                     # results from summary
@@ -1850,6 +1980,42 @@ class MapConnNull:
                         )
                         
         df = pd.concat(df, axis=0)
+        
+        # adjusted stats
+        var_order = df.index.get_level_values("variable").unique().to_list()
+        for stat in stats:
+            for metric in metrics:
+                metric_null = "observed" if metric != "delta" else "delta"
+                if level == "group":
+                    mean = df.loc[(stat, metric, "mean"), :]
+                    try:
+                        null_mean = df.loc[(stat, metric_null, "null_mean"), :]
+                        null_std = df.loc[(stat, metric_null, "null_std"), :]
+                        null_med = df.loc[(stat, metric_null, "null_50%"), :]
+                        null_mad = df.loc[(stat, metric_null, "null_mad"), :]
+                    except KeyError:
+                        continue
+                    df.loc[(stat, metric, "mean_z"), :] = (mean.values - null_mean.values) / null_std.values
+                    df.loc[(stat, metric, "mean_rz"), :] = (mean.values - null_med.values) / (1.4826 * null_mad.values)
+                elif level == "individual":
+                    val = df.loc[(stat, metric, "val", slice(None)), :]
+                    try:
+                        null_mean = df.loc[(stat, metric_null, "null_mean", slice(None)), :]
+                        null_std = df.loc[(stat, metric_null, "null_std", slice(None)), :]
+                        null_med = df.loc[(stat, metric_null, "null_50%", slice(None)), :]
+                        null_mad = df.loc[(stat, metric_null, "null_mad", slice(None)), :]
+                    except KeyError:
+                        continue
+                    df = pd.concat([
+                        df,
+                        ( (val - null_mean.values) / null_std.values ).rename(index={"val": "val_z"}),
+                        ( (val - null_med.values) / (1.4826 * null_mad.values) ).rename(index={"val": "val_rz"})
+                    ])
+        if df.index.get_level_values("variable").isin(["mean_z", "val_z"]).any():
+            var_order.insert(1, "mean_z" if level == "group" else "val_z")
+            var_order.insert(1, "mean_rz" if level == "group" else "val_rz")
+            df = df.loc[stats, metrics, var_order]
+        
         if reduce_index:
             df = reduce_df_index(df)
         return df
@@ -1864,26 +2030,31 @@ class MapConnNull:
             except AttributeError:
                 pass
         self.get_null_curves_dist()
-        self.get_null_stats_dist()
+        self.get_null_stats_dist(dist_stats_from_mean=True)
+        self.get_null_stats_dist(dist_stats_from_mean=False)
         
-        if include_delta:
+        # TODO: handle delta stats better
+        try:
             self.get_delta_pvalues()
-            self.get_delta_null_stats_dist()
+            self.get_delta_null_stats_dist(dist_stats_from_mean=True)
+            self.get_delta_null_stats_dist(dist_stats_from_mean=False)
+        except Exception as e:
+            pass
         
     
-    def drop_nulls(self, ensure_results=True, include_delta=False):
+    def drop_nulls(self, ensure_results=True, keep_null_stats=False):
         """
         Drop nulls from the mapconn instance.
         """
         # TODO: add delta stats
         if ensure_results:
-            self._ensure_results(include_delta=include_delta)
-        
+            self._ensure_results(include_delta=True)
+       
+        self._map_data_null = None
         self._mapconn_null_curves = None
-        self._mapconn_null_stats = None
-        
-        if include_delta:
-            self._mapconn_inverse_null_curves = None
+        self._mapconn_inverse_null_curves = None
+        if not keep_null_stats:
+            self._mapconn_null_stats = None
             self._mapconn_inverse_null_stats = None
 
     def save(self, path, drop_nulls=True, ensure_results=True):
@@ -2028,6 +2199,7 @@ class MapConnNull:
         return cls(mapconn_instance=mapconn_instance_input,
                    map_data_null=map_data_null,
                    mapconn_null_curves=mapconn_null_curves,  
+                   distmat=distmat,
                    n_nulls=n_nulls,
                    n_jobs=n_jobs,
                    dtype=dtype,
@@ -2036,8 +2208,8 @@ class MapConnNull:
         
 # mapconn curves
 def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct=False, mappct_masks_flat=None, 
-                      r_to_z=False, percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal", conn_agg="mean",
-                      return_mappct=False, return_df=True, n_jobs=-1, verbose=True, dtype=np.float32):
+                      r_to_z=False, square=False, percentiles=np.arange(0, 100, 5), mappercentile_threshold="overequal", 
+                      conn_agg="mean", return_mappct=False, return_df=True, n_jobs=-1, verbose=True, dtype=np.float32):
     
     conn_data_flat = np.array(flat_connectivity_matrices, dtype=dtype)
     
@@ -2062,6 +2234,11 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
     else:
         raise ValueError("map_data or mappercentile_data_vect must be provided") 
     
+    # square
+    if square:
+        r_to_z = False
+        conn_data_flat = conn_data_flat ** 2 * np.sign(conn_data_flat)
+    
     # fisher's z transform
     if r_to_z:
         conn_data_flat = np.arctanh(conn_data_flat)
@@ -2080,7 +2257,6 @@ def calculate_mapconn(flat_connectivity_matrices, map_data=None, map_data_is_pct
     else:
         mappct_data = None
     mappct_masks_flat_arr = np.array(mappct_masks_flat)
-
         
     # mean/median after applying percentile thresholds
     if conn_agg == "mean":

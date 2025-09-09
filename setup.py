@@ -18,12 +18,11 @@ setup(
         'nilearn',
         'pingouin',
         'nispace @ git+https://github.com/leondlotter/nispace@5470ca5cb68d8cce3100a014d1a4adfb32f92306',
-        'brainsmash',
-        'brainspace',
         'scikit-learn',
         'joblib',
         'tqdm',        
         'scipy',
+        'spatiotemporal>=1.0.1',
         'setuptools',
     ],
     classifiers=[

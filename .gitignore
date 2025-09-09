@@ -1,9 +1,10 @@
 ## REPO FOLDERS/FILES ################################
 
-# private folders
+# private files/folders
 _*/
 */_archive/
 test_mapconn.ipynb
+mapconn/spin.py
 
 ## OSX ################################
 

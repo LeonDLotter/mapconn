@@ -1,6 +1,7 @@
 import numpy as np
 from nilearn.connectome import sym_matrix_to_vec
 import sklearn.covariance as skcov
+from spatiotemporal import spatial_autocorrelation, temporal_autocorrelation
 
 def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", normalize=True, 
                           dtype=float, verbose=False, **kwargs):
@@ -108,3 +109,16 @@ def _sym_matrix_shape_from_n_tri_elem(num_elements, discard_diagonal=True):
 # vectorize a list of symmetric matrices
 def _vectorize_sym_matrices(sym_matrices, discard_diagonal=True):
     return np.array([sym_matrix_to_vec(m, discard_diagonal=discard_diagonal) for m in sym_matrices])
+
+# spatial autocorrelation of a connectivity matrix
+def matrix_sac(matrix, distmat, discretization=None):
+    if discretization is None:
+        discretization = "fd"
+    if discretization == "fd":
+        x = np.asarray(distmat)
+        np.fill_diagonal(x, 1)
+        x = x[~np.isnan(x)].flatten()
+        q25, q75 = np.percentile(x, [25, 75])
+        discretization = 2 * (q75 - q25) / np.cbrt(x.size)
+
+    return spatial_autocorrelation(matrix, distmat, discretization=discretization)
