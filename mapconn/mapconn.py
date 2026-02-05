@@ -30,6 +30,15 @@ from .utils import _construct_flat_label_pairs, _mappct_flat_to_parcels, reduce_
 
 logger = logging.getLogger(__name__)
 
+
+def _ensure_logging(verbose: bool) -> None:
+    """Configure basic logging when verbose output is requested."""
+    if not verbose:
+        return
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO)
+
 ConnAggregation = Literal["mean", "median"]
 MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
 
@@ -289,7 +298,7 @@ class MapConn:
         Returns a DataFrame or dict of DataFrames keyed by stat.
         """
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if isinstance(stats, str):
             stats = [stats]
         if not all(stat in STATS for stat in stats):
@@ -353,8 +362,9 @@ class MapConn:
         """
         Returns the regional importance of parcels or connections based on leave-one-out analysis.
         """
+        _ensure_logging(verbose)
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         # delta and mapconn_stats as "secret" keyword arguments
         delta = kwargs.pop("delta", False)
         mapconn_stats = kwargs.pop("mapconn_stats", None)
@@ -970,7 +980,7 @@ class MapConnInv:
         """
         kwargs["delta"] = True
         kwargs["mapconn_stats"] = self.get_delta_stats(
-            stats=kwargs.get("stats", ["auc", "poly2"]),
+            stats=kwargs.get("stats", "auc"),
             maps=kwargs.get("maps", None),
             percentiles=kwargs.get("percentiles", None),
             ids=kwargs.get("ids", None),
@@ -1010,6 +1020,8 @@ class MapConnInv:
         Returns DataFrame(s) indexed by statistic (rows) and maps (columns).
         """
 
+        _ensure_logging(verbose)
+
         # check number of fc matrices
         if len(self._mapconn_instance._ids) < 2:
             raise ValueError(
@@ -1023,7 +1035,7 @@ class MapConnInv:
 
         # stats
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if stats == "all":
             stats = STATS
         elif isinstance(stats, str):
@@ -1110,7 +1122,7 @@ class MapConnInv:
                 if permutation:
                     pvalues_stat = pd.DataFrame(columns=maps, index=["stat", "p"])
                     # iterate over maps
-                    for m in tqdm(maps, desc="Calculating p-values"):
+                    for m in tqdm(maps, desc="Calculating p-values", disable=not verbose):
 
                         if permutation == "label":
                             # data
@@ -1231,16 +1243,16 @@ class MapConnInv:
             df = reduce_df_index(df)
         return df
 
-    def _ensure_results(self) -> None:
+    def _ensure_results(self, verbose: bool = False) -> None:
         """
         Ensure standard p-value results are computed and cached.
 
         Runs permutation (raw and normalized) and paired t-test p-values
         so that `.save()` can persist a fully populated instance, even if source data were dropped.
         """
-        self.get_pvalues(permutation=True, norm=False)
-        self.get_pvalues(permutation=True, norm=True)
-        self.get_pvalues(permutation=False)
+        self.get_pvalues(permutation=True, norm=False, verbose=verbose)
+        self.get_pvalues(permutation=True, norm=True, verbose=verbose)
+        self.get_pvalues(permutation=False, verbose=verbose)
 
     def save(self, path: Union[str, Path], ensure_results: bool = True) -> None:
         """
@@ -1774,7 +1786,7 @@ class MapConnNull:
     ]:
         """Compute or return null statistics for each null sample."""
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if isinstance(stats, str):
             stats = [stats]
         if not inverted:
@@ -1860,7 +1872,7 @@ class MapConnNull:
         Returns list or dict of DataFrames aligned to observed maps.
         """
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         # get null stats
         kwargs = dict(
             stats=stats,
@@ -1910,7 +1922,7 @@ class MapConnNull:
         columns and distribution metrics as the index (and optionally id).
         """
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if dist_stats_quantiles is None:
             dist_stats_quantiles = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99]
         if isinstance(stats, str):
@@ -2028,7 +2040,7 @@ class MapConnNull:
         """
         # TODO: ensure that subsetting works
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if dist_stats_quantiles is None:
             dist_stats_quantiles = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.975, 0.99]
         if isinstance(stats, str):
@@ -2129,7 +2141,7 @@ class MapConnNull:
         """
 
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if stats == "all":
             stats = STATS
         elif isinstance(stats, str):
@@ -2241,6 +2253,7 @@ class MapConnNull:
         ids: Optional[Sequence[Any]] = None,
         p_from_mean: bool = True,
         verbose: bool = True,
+        null_verbose: bool = False,
         tail: str = "two",
         recalculate: bool = False,
         n_jobs: Optional[int] = None,
@@ -2253,6 +2266,7 @@ class MapConnNull:
         Get permuted p-values for delta statistics.
         Will re-run null analysis, so takes as much time as "fitting" of the model did.
         """
+        _ensure_logging(verbose)
         if not isinstance(self._mapconn_instance, MapConnInv):
             raise ValueError("Requires MapConnNull instance created from MapConnInv instance")
         # TODO: implement p-values for individual matrices
@@ -2268,7 +2282,7 @@ class MapConnNull:
 
         # stats
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if isinstance(stats, str):
             stats = [stats]
 
@@ -2345,7 +2359,7 @@ class MapConnNull:
                 conn_agg=conn_agg,
                 mappercentile_threshold=mappct_thresh,
                 n_jobs=1,
-                verbose=False,
+                verbose=null_verbose,
                 dtype=dtype,
             )
             for map_data_null_i in tqdm(
@@ -2407,6 +2421,7 @@ class MapConnNull:
         ids: Optional[Sequence[Any]] = None,
         agg_stats: Optional[Sequence[str]] = None,
         reduce_index: bool = True,
+        verbose: bool = True,
     ) -> pd.DataFrame:
         """
         Returns concatenated dataframes of all available summary data (no curves).
@@ -2495,7 +2510,7 @@ class MapConnNull:
                     else:
                         if self._mapconn_pvalues_delta is not None:
                             df.append(
-                                self.get_delta_pvalues(stats=stat, **get_kwargs)
+                                self.get_delta_pvalues(stats=stat, verbose=verbose, **get_kwargs)
                                 .assign(curve_stat=stat, metric=metric, variable="p")
                                 .set_index(["curve_stat", "metric", "variable"])
                             )
@@ -2568,7 +2583,10 @@ class MapConnNull:
         return df
 
     def _ensure_results(
-        self, stats: Optional[Union[str, Sequence[str]]] = None, include_delta: bool = False
+        self,
+        stats: Optional[Union[str, Sequence[str]]] = None,
+        include_delta: bool = False,
+        verbose: bool = False,
     ) -> None:
         """
         Ensure null stats and p-values are computed for standard outputs.
@@ -2579,11 +2597,16 @@ class MapConnNull:
         # TODO: handle stats types
         # TODO: add delta stats
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         self.get_stats(stats=stats)
         for p_from_mean, norm, inverted in product([True, False], [True, False], [True, False]):
             try:
-                self.get_pvalues(stats=stats, p_from_mean=p_from_mean, norm=norm, inverted=inverted)
+                self.get_pvalues(
+                    stats=stats,
+                    p_from_mean=p_from_mean,
+                    norm=norm,
+                    inverted=inverted,
+                )
             except AttributeError:
                 pass
         self.get_null_curves_dist()
@@ -2592,7 +2615,7 @@ class MapConnNull:
 
         # TODO: handle delta stats better
         try:
-            self.get_delta_pvalues(stats=stats)
+            self.get_delta_pvalues(stats=stats, verbose=verbose)
             self.get_delta_null_stats_dist(dist_stats_from_mean=True, stats=stats)
             self.get_delta_null_stats_dist(dist_stats_from_mean=False, stats=stats)
         except Exception:
@@ -2609,7 +2632,7 @@ class MapConnNull:
         """
         # TODO: add delta stats
         if stats is None:
-            stats = ["auc", "poly2"]
+            stats = "auc"
         if ensure_results:
             self._ensure_results(include_delta=True, stats=stats)
 
@@ -2682,6 +2705,8 @@ class MapConnNull:
         - l2rmap: left-to-right mapping for parcellation, necessary for above arguments 2-3 in case of non-symmetric parcellation
         - parc_symmetric: whether parcellation is symmetric, set to True to enable above arguments 1-3 without l2rmap
         """
+
+        _ensure_logging(verbose)
 
         # checks and handle MapConnInv
         if not isinstance(mapconn_instance, (MapConn, MapConnInv)):
@@ -2767,7 +2792,7 @@ class MapConnNull:
                 conn_agg=conn_agg,
                 mappercentile_threshold=mappct_thresh,
                 n_jobs=1,
-                verbose=False,
+                verbose=null_verbose,
                 dtype=dtype,
             )
             for map_data_null_i in tqdm(
@@ -2816,6 +2841,7 @@ def calculate_mapconn(
     Returns:
     - DataFrame with shape $(n_{ids}, n_{maps} \times n_{percentiles})$ when `return_df=True`.
     """
+    _ensure_logging(verbose)
     if percentiles is None:
         percentiles = np.arange(0, 100, 5)
     conn_data_flat = np.array(flat_connectivity_matrices, dtype=dtype)
