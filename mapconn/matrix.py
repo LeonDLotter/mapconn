@@ -2,9 +2,13 @@ import numpy as np
 from nilearn.connectome import sym_matrix_to_vec
 import sklearn.covariance as skcov
 from spatiotemporal import spatial_autocorrelation, temporal_autocorrelation
+import logging
+from typing import Any, Callable, Optional, Sequence, Union
 
-def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", normalize=True, 
-                          dtype=float, verbose=False, **kwargs):
+logger = logging.getLogger(__name__)
+
+def _get_matrix_estimator(method: str = "EmpiricalCovariance", kind: str = "covariance", normalize: bool = True, 
+                          dtype: Union[np.dtype, type] = float, verbose: bool = False, **kwargs: Any) -> Callable[[np.ndarray], np.ndarray]:
     """
     Get a function to calculate a covariance matrix from standardized time series data. 
     Input to the returned function is a timeseries array with shape (n_timepoints, n_parcels).
@@ -12,13 +16,14 @@ def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", norma
     
     # intercept if standard pearson because much faster
     if method.lower() == "empiricalcovariance" and kind == "covariance" and normalize:
-        def matrix_fun(timeseries):
+        def matrix_fun(timeseries: np.ndarray) -> np.ndarray:
+            """Compute Pearson correlation matrix from time series."""
             correlation_matrix = np.corrcoef(timeseries.T)
             return correlation_matrix      
         
         # verbose
         if verbose:
-            print(f"Estimating pearson correlation matrix")
+            logger.info("Estimating pearson correlation matrix")
             
     # other options: use sklearn
     else:
@@ -45,11 +50,13 @@ def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", norma
         if normalize:
             norm_fun = _covariance_to_pearson if matrix_attr == "covariance_" else _precision_to_partial_pearson
         else:
-            def norm_fun(matrix):
+            def norm_fun(matrix: np.ndarray) -> np.ndarray:
+                """Return unmodified matrix when normalization is disabled."""
                 return matrix
             
         # define function
-        def matrix_fun(timeseries):
+        def matrix_fun(timeseries: np.ndarray) -> np.ndarray:
+            """Compute covariance/precision matrix and normalize if requested."""
             matrix = getattr(
                 estimator(**kwargs).fit(np.array(timeseries)), 
                 matrix_attr
@@ -60,35 +67,41 @@ def _get_matrix_estimator(method="EmpiricalCovariance", kind="covariance", norma
         # verbose
         if verbose:
             if method.lower() == "empiricalcovariance" and kind == "precision" and normalize:
-                print(f"Estimating partial pearson correlation matrix")
+                logger.info("Estimating partial pearson correlation matrix")
             else:
-                print(f"Estimating {'normalized ' if normalize else ''}{matrix_attr[:-1]} "
-                      f"matrix using sklearn - {method}")
+                logger.info("Estimating %s%s matrix using sklearn - %s",
+                            "normalized " if normalize else "",
+                            matrix_attr[:-1],
+                            method)
     
     # return function
     return matrix_fun
 
-def _covariance_to_pearson(covariance_matrix):
+def _covariance_to_pearson(covariance_matrix: np.ndarray) -> np.ndarray:
+    """Convert covariance matrix to Pearson correlation matrix."""
     std = np.sqrt(np.diag(covariance_matrix))
     cor_matrix = covariance_matrix / np.outer(std, std)
     np.fill_diagonal(cor_matrix, 1)
     return cor_matrix
 
-def _precision_to_partial_pearson(precision_matrix):
+def _precision_to_partial_pearson(precision_matrix: np.ndarray) -> np.ndarray:
+    """Convert precision matrix to partial Pearson correlation matrix."""
     std = np.sqrt(np.diag(precision_matrix))
     pcor_matrix = -precision_matrix / np.outer(std, std)
     np.fill_diagonal(pcor_matrix, 1)
     return pcor_matrix
 
 # get number of elements in a symmetric matrix triangle
-def _n_sym_matrix_tri_elem_from_shape(shape0, discard_diagonal=True):
+def _n_sym_matrix_tri_elem_from_shape(shape0: int, discard_diagonal: bool = True) -> int:
+    """Return number of elements in a symmetric matrix triangle."""
     if discard_diagonal:
         return shape0 * (shape0 - 1) // 2
     else:
         return shape0 * (shape0 + 1) // 2
     
 # get original size of a matrix given the number of elements in its triangle
-def _sym_matrix_shape_from_n_tri_elem(num_elements, discard_diagonal=True):
+def _sym_matrix_shape_from_n_tri_elem(num_elements: int, discard_diagonal: bool = True) -> int:
+    """Return matrix size from number of triangular elements."""
     if discard_diagonal:
         a = 1
         b = -1
@@ -107,11 +120,13 @@ def _sym_matrix_shape_from_n_tri_elem(num_elements, discard_diagonal=True):
     return int((-b + np.sqrt(discriminant)) / (2 * a))
 
 # vectorize a list of symmetric matrices
-def _vectorize_sym_matrices(sym_matrices, discard_diagonal=True):
+def _vectorize_sym_matrices(sym_matrices: Union[np.ndarray, Sequence[np.ndarray]], discard_diagonal: bool = True) -> np.ndarray:
+    """Vectorize a list/array of symmetric matrices."""
     return np.array([sym_matrix_to_vec(m, discard_diagonal=discard_diagonal) for m in sym_matrices])
 
 # spatial autocorrelation of a connectivity matrix
-def matrix_sac(matrix, distmat, discretization=None):
+def matrix_sac(matrix: np.ndarray, distmat: np.ndarray, discretization: Optional[Union[str, float]] = None) -> np.ndarray:
+    """Compute spatial autocorrelation of a connectivity matrix."""
     if discretization is None:
         discretization = "fd"
     if discretization == "fd":

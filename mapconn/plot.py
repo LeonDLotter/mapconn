@@ -2,14 +2,35 @@ import seaborn as sn
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 
-def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
-                       errorbar=("pi", 90), label="Sample mean (90% PI)", color="tab:red", alpha=1, lw=2,
-                       errorbar_kws=None,
-                       plot_individual=True, ind_color=None, ind_alpha=0.1, ind_lw=0.5,
-                       zorder_mean=1000,
-                       xlabel="Percentile", ylabel="FC", title=None, legend=False):
+def plot_mapconn_curve(curves_obs: Optional[Union[pd.DataFrame, pd.Series]] = None,
+                       curves_null: Optional[Union[List[pd.DataFrame], pd.DataFrame]] = None,
+                       ax: Optional[Axes] = None,
+                       errorbar: Union[Tuple[str, int], str] = ("pi", 90),
+                       label: str = "Sample mean (90% PI)",
+                       color: str = "tab:red",
+                       alpha: float = 1,
+                       lw: float = 2,
+                       errorbar_kws: Optional[Dict[str, Any]] = None,
+                       plot_individual: bool = True,
+                       ind_color: Optional[str] = None,
+                       ind_alpha: float = 0.1,
+                       ind_lw: float = 0.5,
+                       zorder_mean: int = 1000,
+                       xlabel: str = "Percentile",
+                       ylabel: str = "FC",
+                       title: Optional[str] = None,
+                       legend: Union[bool, str] = False
+                       ) -> Axes:
+    """
+    Plot a single mapconn curve with optional null distribution bands.
+
+    Returns the matplotlib Axes object.
+    """
     
     #  validate input
     if curves_obs is None and curves_null is None:
@@ -112,12 +133,27 @@ def plot_mapconn_curve(curves_obs=None, curves_null=None, ax=None,
     return ax
 
 
+def plot_mapconn_curves(curves_obs: Optional[Union[pd.DataFrame, pd.Series]] = None,
+                        curves_null: Optional[Union[List[pd.DataFrame], pd.DataFrame]] = None,
+                        maps: Optional[Union[Sequence[Any], Dict[Any, Sequence[Any]], str]] = None,
+                        fig: Optional[Figure] = None,
+                        axes: Optional[Union[Axes, np.ndarray]] = None,
+                        inset_axes: Optional[Union[Sequence[Axes], np.ndarray]] = None,
+                        n_cols: int = 6,
+                        figsize: Optional[Tuple[float, float]] = None,
+                        sharex: bool = True,
+                        sharey: bool = False,
+                        y_lims: Optional[Tuple[Optional[float], Optional[float]]] = None,
+                        titles: bool = True,
+                        colors: Optional[Union[str, Tuple[float, float, float], List[Any], Dict[Any, List[Any]]]] = None,
+                        legend: Union[str, bool] = "row",
+                        plot_kws: Dict[str, Any] = {}
+                        ) -> Tuple[Figure, np.ndarray]:
+    """
+    Plot mapconn curves for multiple maps in a grid layout.
 
-def plot_mapconn_curves(curves_obs=None, curves_null=None, maps=None,
-                        fig=None, axes=None, inset_axes=None, n_cols=6, figsize=None, sharex=True, sharey=False, y_lims=None,
-                        titles=True,
-                        colors=None, legend="row",
-                        plot_kws={}):
+    Returns the matplotlib Figure and Axes.
+    """
     
     #  validate input
     if curves_obs is None and curves_null is None:
@@ -229,6 +265,4 @@ def plot_mapconn_curves(curves_obs=None, curves_null=None, maps=None,
             axes[r, c].set_axis_off()
             
     return fig, axes
-    
-    #fig.tight_layout()
     

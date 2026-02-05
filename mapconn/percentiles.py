@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import logging
+from typing import Literal, Sequence, Optional, Union, Tuple
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 from scipy.stats import percentileofscore
@@ -8,11 +10,29 @@ from nilearn.connectome import sym_matrix_to_vec
 from .matrix import _n_sym_matrix_tri_elem_from_shape
 from .utils import over, below, overequal, belowequal
 
+logger = logging.getLogger(__name__)
 
-def _calc_mappct_masks(map_data=None, map_data_is_pct=False, percentiles=np.arange(0, 100, 5), 
-                       n_jobs=-1, verbose=True, pct_kind="strict", pct_threshold="overequal",
-                       return_df=True, dtype=None):
-    
+
+MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
+
+
+def _calc_mappct_masks(map_data: Union[np.ndarray, pd.DataFrame], 
+                       map_data_is_pct: bool = False, 
+                       percentiles: Optional[Sequence[float]] = None, 
+                       n_jobs: int = -1, 
+                       verbose: bool = True, 
+                       pct_kind: str = "strict", 
+                       pct_threshold: MapPctThreshold = "overequal",
+                       return_df: bool = True, 
+                       dtype: Optional[Union[np.dtype, type]] = None
+                       ) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[np.ndarray, np.ndarray]]:
+    """
+    Compute map-percentile masks from map data.
+
+    Returns (percentile_data, mask_matrix) when `return_df=True`.
+    """
+    if percentiles is None:
+        percentiles = np.arange(0, 100, 5)
     # data
     if map_data.ndim == 1:
         map_data_arr = np.atleast_2d(map_data)
@@ -21,7 +41,7 @@ def _calc_mappct_masks(map_data=None, map_data_is_pct=False, percentiles=np.aran
     else:
         raise ValueError("map_data must be a 1D or 2D array")
     if verbose:
-        print(f"Got map data with {map_data_arr.shape[0]} maps and {map_data_arr.shape[1]} values")
+        logger.info("Got map data with %s maps and %s values", map_data_arr.shape[0], map_data_arr.shape[1])
     
     # threshold function
     threshold_funs = {
@@ -38,7 +58,7 @@ def _calc_mappct_masks(map_data=None, map_data_is_pct=False, percentiles=np.aran
     # calculate map percentiles
     if not map_data_is_pct:
         if verbose:
-            print("Calculating map percentiles")
+            logger.info("Calculating map percentiles")
         map_data_arr = np.apply_along_axis(
             values_to_percentiles, 
             axis=1, 
@@ -47,7 +67,7 @@ def _calc_mappct_masks(map_data=None, map_data_is_pct=False, percentiles=np.aran
         ).astype(dtype)
     else:
         if verbose:
-            print("Assuming percentiles already calculated")
+            logger.info("Assuming percentiles already calculated")
     
     # maps
     n_maps = map_data_arr.shape[0]
@@ -98,7 +118,10 @@ def _calc_mappct_masks(map_data=None, map_data_is_pct=False, percentiles=np.aran
     return out
     
     
-def values_to_percentiles(values, population=None, kind="strict"):
+def values_to_percentiles(values: Union[np.ndarray, Sequence[float]],
+                          population: Optional[Union[np.ndarray, Sequence[float]]] = None,
+                          kind: str = "strict") -> np.ndarray:
+    """Convert values to percentile ranks within a population."""
     if population is None:
         population = values
     return percentileofscore(

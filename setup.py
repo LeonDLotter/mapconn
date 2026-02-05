@@ -1,9 +1,18 @@
+from pathlib import Path
 from setuptools import setup, find_packages
+
+
+def read_version() -> str:
+    version_file = Path(__file__).parent / "mapconn" / "__init__.py"
+    for line in version_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("__version__"):
+            return line.split("=", 1)[1].strip().strip("\"")
+    raise RuntimeError("Unable to find __version__ in mapconn/__init__.py")
 
 setup(
     name='mapconn',
-    version='0.0.1-dev',
-    description='A package for reference map-dependent connectivity analyses.',
+    version=read_version(),
+    description='A package for reference map-dependent connectivity analyses (NEOFC).',
     author='Leon D. Lotter',
     author_email='leondlotter@gmail.com',
     url='https://github.com/leondlotter/mapconn',

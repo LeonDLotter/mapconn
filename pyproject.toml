@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mapconn"
+dynamic = ["version"]
+description = "A package for reference map-dependent connectivity analyses (NEOFC)."
+authors = [{ name = "Leon D. Lotter", email = "leondlotter@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+	"numpy",
+	"pandas",
+	"matplotlib",
+	"seaborn",
+	"xarray",
+	"nibabel",
+	"nilearn",
+	"pingouin",
+	"nispace @ git+https://github.com/leondlotter/nispace@5470ca5cb68d8cce3100a014d1a4adfb32f92306",
+	"scikit-learn",
+	"joblib",
+	"tqdm",
+	"scipy",
+	"spatiotemporal>=1.0.1",
+	"setuptools",
+]
+classifiers = [
+	"Programming Language :: Python :: 3",
+	"License :: OSI Approved :: MIT License",
+	"Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/leondlotter/mapconn"
+
+[project.optional-dependencies]
+dev = [
+	"pytest",
+	"ruff",
+	"black",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "mapconn.__version__" }
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I"]
+ignore = ["E203", "E266", "E501"]
