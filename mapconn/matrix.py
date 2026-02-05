@@ -1,9 +1,10 @@
-import numpy as np
-from nilearn.connectome import sym_matrix_to_vec
-import sklearn.covariance as skcov
-from spatiotemporal import spatial_autocorrelation, temporal_autocorrelation
 import logging
 from typing import Any, Callable, Optional, Sequence, Union
+
+import numpy as np
+import sklearn.covariance as skcov
+from nilearn.connectome import sym_matrix_to_vec
+from spatiotemporal import spatial_autocorrelation
 
 logger = logging.getLogger(__name__)
 

@@ -1,27 +1,32 @@
-import numpy as np
-import pandas as pd
-import pickle
 import gzip
 import logging
+import pickle
+from itertools import product
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union, Literal
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+
+import numpy as np
+import pandas as pd
+import xarray as xr
 from joblib import Parallel, delayed
-from tqdm.auto import tqdm
 from nilearn.connectome import vec_to_sym_matrix
 from nispace.nulls import generate_null_maps
-from nispace.stats.misc import null_to_p, permute_groups
 from nispace.stats.effectsize import cohen_paired
-from scipy.stats import ttest_rel, median_abs_deviation
-from itertools import product
-import xarray as xr
+from nispace.stats.misc import null_to_p, permute_groups
+from scipy.stats import median_abs_deviation, ttest_rel
+from tqdm.auto import tqdm
 
-from .matrix import (_get_matrix_estimator, _vectorize_sym_matrices,
-                     _n_sym_matrix_tri_elem_from_shape, _sym_matrix_shape_from_n_tri_elem,
-                     matrix_sac)
-from .percentiles import _calc_mappct_masks
-from .utils import _construct_flat_label_pairs, _mappct_flat_to_parcels, reduce_df_index
-from .stats import _calc_mapconn_stats, _remove_global
 from .constants import STATS
+from .matrix import (
+    _get_matrix_estimator,
+    _n_sym_matrix_tri_elem_from_shape,
+    _sym_matrix_shape_from_n_tri_elem,
+    _vectorize_sym_matrices,
+    matrix_sac,
+)
+from .percentiles import _calc_mappct_masks
+from .stats import _calc_mapconn_stats, _remove_global
+from .utils import _construct_flat_label_pairs, _mappct_flat_to_parcels, reduce_df_index
 
 logger = logging.getLogger(__name__)
 
@@ -1558,9 +1563,9 @@ class MapConnNull:
         obs_full = self._mapconn_instance.get_curves(remove_global=False)
         obs_sel = self._mapconn_instance.get_curves(maps=maps, percentiles=percentiles, ids=ids, remove_global=False)
         row_idc_full = obs_full.index.to_list()
-        row_idc_sel = [row_idc_full.index(l) for l in obs_sel.index]
+        row_idc_sel = [row_idc_full.index(idx) for idx in obs_sel.index]
         col_idc_full = obs_full.columns.to_list()
-        col_idc_sel = [col_idc_full.index(l) for l in obs_sel.columns]
+        col_idc_sel = [col_idc_full.index(idx) for idx in obs_sel.columns]
         null = [arr[row_idc_sel, :][:, col_idc_sel] for arr in null_curves]
         if return_df:
             if remove_global:
@@ -1947,11 +1952,11 @@ class MapConnNull:
             n_jobs = self._n_jobs
             
         # get stored pvalues (can be None)
-        l = "group" if p_from_mean else "individual"
+        level_key = "group" if p_from_mean else "individual"
         d = "exact" if not norm else "norm"
         m = "obs" if not inverted else "inv"
         t = tail
-        pvalues_key = f"map-{m}_level-{l}_dist-{d}_tail-{t}"
+        pvalues_key = f"map-{m}_level-{level_key}_dist-{d}_tail-{t}"
         pvalues = self._mapconn_pvalues.get(pvalues_key, None)
         
         # kwargs to load stats
@@ -2255,7 +2260,7 @@ class MapConnNull:
                             try:
                                 tmp = self.get_delta_null_stats_dist(
                                     dist_stats_from_mean=False, stats=stat, **get_kwargs)
-                            except Exception as e:
+                            except Exception:
                                 # TODO: handle this better
                                 continue
                         df.append(
@@ -2305,7 +2310,7 @@ class MapConnNull:
                         else:
                             try:
                                 tmp = self.get_delta_null_stats_dist(stats=stat, **get_kwargs)
-                            except Exception as e:
+                            except Exception:
                                 # TODO: handle this better
                                 continue
                         df.append(
@@ -2384,7 +2389,7 @@ class MapConnNull:
             self.get_delta_pvalues(stats=stats)
             self.get_delta_null_stats_dist(dist_stats_from_mean=True, stats=stats)
             self.get_delta_null_stats_dist(dist_stats_from_mean=False, stats=stats)
-        except Exception as e:
+        except Exception:
             pass
         
     

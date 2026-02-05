@@ -1,8 +1,10 @@
+from typing import Dict, Sequence, Union
+
 import numpy as np
 import pandas as pd
-from typing import Dict, Iterable, List, Sequence, Union
 
 from .constants import STATS
+
 
 def _remove_global(mapconn_curves: pd.DataFrame) -> pd.DataFrame:
     """

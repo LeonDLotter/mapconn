@@ -1,10 +1,11 @@
-import seaborn as sn
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
+import pandas as pd
+import seaborn as sn
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 
 def plot_mapconn_curve(curves_obs: Optional[Union[pd.DataFrame, pd.Series]] = None,
@@ -51,7 +52,7 @@ def plot_mapconn_curve(curves_obs: Optional[Union[pd.DataFrame, pd.Series]] = No
     if title is None:
         try:
             title = curves_obs.columns.get_level_values(0).unique()[0]
-        except:
+        except Exception:
             title = None
     elif title in [False, ""]:
         title = None
@@ -108,7 +109,7 @@ def plot_mapconn_curve(curves_obs: Optional[Union[pd.DataFrame, pd.Series]] = No
             color="0.3",
             alpha=1,
             lw=lw,
-            label=f"Median of null means",
+            label="Median of null means",
             zorder=-1000
         )
         for p1, p2, c in [("1%", "99%", "0.9"), ("10%", "90%", "0.8"), ("25%", "75%", "0.7")]:
