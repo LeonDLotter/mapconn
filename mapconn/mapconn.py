@@ -39,6 +39,7 @@ def _ensure_logging(verbose: bool) -> None:
     if not root_logger.handlers:
         logging.basicConfig(level=logging.INFO)
 
+
 ConnAggregation = Literal["mean", "median"]
 MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
 
