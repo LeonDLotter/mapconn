@@ -14,7 +14,7 @@ from nispace.nulls import generate_null_maps
 from nispace.stats.effectsize import cohen_paired
 from nispace.stats.misc import null_to_p, permute_groups
 from scipy.stats import median_abs_deviation, ttest_rel
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .constants import STATS
 from .matrix import (
@@ -37,7 +37,10 @@ def _ensure_logging(verbose: bool) -> None:
         return
     root_logger = logging.getLogger()
     if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s:%(name)s:%(lineno)d: %(message)s",
+        )
 
 
 ConnAggregation = Literal["mean", "median"]
@@ -65,7 +68,8 @@ class MapConn:
         loo_stats: Optional[Dict[str, Any]] = None,
         n_jobs: int = -1,
         dtype: Union[np.dtype, type] = np.float32,
-        get_stats: bool = False,
+        get_stats: bool = True,
+        verbose: bool = True,
     ) -> None:
         """
         Initialize the MapConn class.
@@ -78,6 +82,9 @@ class MapConn:
         - `flat_mappercentile_masks`: DataFrame of shape
             $(n_{maps} \times n_{percentiles}, n_{edges})$ aligned to `mapconn_curves`.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(f"Initializing MapConn (n_jobs={n_jobs}, dtype={dtype})")
         self._conn_data = flat_connectivity_matrices
         self._mappct_masks = flat_mappercentile_masks
         self._map_data = map_data
@@ -445,9 +452,9 @@ class MapConn:
                     force_dict=True
                 )
             else:
-                mapconn_stats_loo = MapConnInv.from_flat_matrix(
-                    **mapconn_kwargs, get_pvalues=False
-                ).get_delta_stats(force_dict=True)
+                mapconn_stats_loo = MapConnInv.from_flat_matrix(**mapconn_kwargs).get_delta_stats(
+                    force_dict=True
+                )
 
             # return difference between full stats and loo stats
             diff = {}
@@ -606,6 +613,11 @@ class MapConn:
         - `map_data`: array/DataFrame with shape $(n_{maps}, n_{parcels})$.
         - `percentiles`: values in $[0, 100]$ used to compute masks.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Creating MapConn from flattened connectivity matrices (n_jobs={n_jobs}, dtype={dtype})"
+            )
         if map_operations is None:
             map_operations = []
         if percentiles is None:
@@ -669,6 +681,7 @@ class MapConn:
             n_jobs=n_jobs,
             dtype=dtype,
             get_stats=True,
+            verbose=verbose,
         )
 
     @classmethod
@@ -694,6 +707,11 @@ class MapConn:
         `connectivity_matrices` can be a list or array with shape
         $(n_{ids}, n_{parcels}, n_{parcels})$.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Flattening connectivity matrices to create MapConn (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         if percentiles is None:
             percentiles = np.arange(0, 100, 5)
@@ -762,6 +780,11 @@ class MapConn:
         $(n_{time}, n_{parcels})$ or a 3D array with shape
         $(n_{ids}, n_{time}, n_{parcels})$.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Calculating connectivity matrices to create MapConn (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         if percentiles is None:
             percentiles = np.arange(0, 100, 5)
@@ -862,13 +885,17 @@ class MapConnInv:
         n_perm: int = 10000,
         dtype: Union[np.dtype, type] = np.float32,
         get_stats: bool = False,
-        get_pvalues: bool = False,
+        # get_pvalues: bool = False, # experimental
+        verbose: bool = True,
     ) -> None:
         """
         Initialize a MapConnInv instance.
 
         Stores original and inverted MapConn objects and optional p-value results.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(f"Initializing MapConnInv (n_jobs={n_jobs}, dtype={dtype})")
         self._mapconn_instance = mapconn_instance
         self._mapconn_inverted_instance = mapconn_inverted_instance
         self._mapconn_pvalues_perm = mapconn_pvalues_perm
@@ -881,74 +908,75 @@ class MapConnInv:
         # precompute
         if get_stats:
             self.get_stats()
-        if get_pvalues:
-            self.get_pvalues(permutation=True, norm=False, n_perm=n_perm)
-            self.get_pvalues(permutation=True, norm=True, n_perm=n_perm)
-            self.get_pvalues(permutation=False)
+        # experimental
+        # if get_pvalues:
+        #     self.get_pvalues(permutation=True, norm=False, n_perm=n_perm)
+        #     self.get_pvalues(permutation=True, norm=True, n_perm=n_perm)
+        #     self.get_pvalues(permutation=False)
 
     def get_original(self) -> "MapConn":
         """
-        Returns the mapconn instance stored in the instance.
+        Returns the original MapConn instance stored in the instance.
         """
         return self._mapconn_instance
 
     def get_inverted(self) -> "MapConn":
         """
-        Returns the mapconn inverted instance stored in the instance.
+        Returns the inverted MapConn instance stored in the instance.
         """
         return self._mapconn_inverted_instance
 
     def get_map_data(self, **kwargs) -> pd.DataFrame:
         """
-        Passed through to the original mapconn instance. See MapConn.get_map_data() for details.
+        Passed through to the original MapConn instance. See MapConn.get_map_data() for details.
         """
         return self._mapconn_instance.get_map_data(**kwargs)
 
     def get_inverted_map_data(self, **kwargs) -> pd.DataFrame:
         """
-        Passed through to the inverted mapconn instance. See MapConn.get_map_data() for details.
+        Passed through to the inverted MapConn instance. See MapConn.get_map_data() for details.
         """
         return self._mapconn_inverted_instance.get_map_data(**kwargs)
 
     def get_connectivity_matrices(self, **kwargs) -> Union[pd.DataFrame, List[np.ndarray]]:
         """
-        Passed through to the original mapconn instance. See MapConn.get_connectivity_matrices() for details.
+        Passed through to the original MapConn instance. See MapConn.get_connectivity_matrices() for details.
         """
         return self._mapconn_instance.get_connectivity_matrices(**kwargs)
 
     def get_mappercentile_masks(self, **kwargs) -> pd.DataFrame:
         """
-        Passed through to the original mapconn instance. See MapConn.get_mappercentile_masks() for details.
+        Passed through to the original MapConn instance. See MapConn.get_mappercentile_masks() for details.
         """
         return self._mapconn_instance.get_mappercentile_masks(**kwargs)
 
     def get_curves(self, **kwargs) -> pd.DataFrame:
         """
-        Passed through to the original mapconn instance. See MapConn.get_curves() for details.
+        Passed through to the original MapConn instance. See MapConn.get_curves() for details.
         """
         return self._mapconn_instance.get_curves(**kwargs)
 
     def get_inverted_curves(self, **kwargs) -> pd.DataFrame:
         """
-        Passed through to the inverted mapconn instance. See MapConn.get_curves() for details.
+        Passed through to the inverted MapConn instance. See MapConn.get_curves() for details.
         """
         return self._mapconn_inverted_instance.get_curves(**kwargs)
 
     def get_stats(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        Passed through to the original mapconn instance. See MapConn.get_stats() for details.
+        Passed through to the original MapConn instance. See MapConn.get_stats() for details.
         """
         return self._mapconn_instance.get_stats(**kwargs)
 
     def get_inverted_stats(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        Passed through to the inverted mapconn instance. See MapConn.get_stats() for details.
+        Passed through to the inverted MapConn instance. See MapConn.get_stats() for details.
         """
         return self._mapconn_inverted_instance.get_stats(**kwargs)
 
     def get_delta_stats(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        Difference between get_stats() of original and inverted mapconn instances.
+        Difference between get_stats() of original and inverted MapConn instances.
         """
         original = self._mapconn_instance.get_stats(**(kwargs | {"force_dict": True}))
         inverted = self._mapconn_inverted_instance.get_stats(**(kwargs | {"force_dict": True}))
@@ -963,19 +991,19 @@ class MapConnInv:
 
     def get_loo(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        Passed through to the original mapconn instance. See MapConn.get_loo() for details.
+        Passed through to the original MapConn instance. See MapConn.get_loo() for details.
         """
         return self._mapconn_instance.get_loo(**kwargs)
 
     def get_inverted_loo(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        Passed through to the inverted mapconn instance. See MapConn.get_loo() for details.
+        Passed through to the inverted MapConn instance. See MapConn.get_loo() for details.
         """
         return self._mapconn_inverted_instance.get_loo(**kwargs)
 
     def get_delta_loo(self, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
-        LOO calculated for delta between original and inverted mapconn stats.
+        LOO calculated for delta between original and inverted MapConn stats.
         Note: this will result in the same as `get_loo() - get_inverted_loo()` but will likely be
         faster if the other two are not needed.
         """
@@ -994,7 +1022,7 @@ class MapConnInv:
         self, distmat: np.ndarray, ids: Optional[Sequence[Any]] = None, **kwargs
     ) -> pd.DataFrame:
         """
-        Passed through to the original mapconn instance. See MapConn.get_matrix_sac() for details.
+        Passed through to the original MapConn instance. See MapConn.get_matrix_sac() for details.
         """
         return self._mapconn_instance.get_matrix_sac(ids=ids, distmat=distmat, **kwargs)
 
@@ -1020,6 +1048,9 @@ class MapConnInv:
 
         Returns DataFrame(s) indexed by statistic (rows) and maps (columns).
         """
+        raise NotImplementedError(
+            "MapConnInv.get_pvalues() is an experimental function and should not be used yet."
+        )
 
         _ensure_logging(verbose)
 
@@ -1244,24 +1275,24 @@ class MapConnInv:
             df = reduce_df_index(df)
         return df
 
-    def _ensure_results(self, verbose: bool = False) -> None:
-        """
-        Ensure standard p-value results are computed and cached.
+    # def _ensure_results(self, verbose: bool = False) -> None:
+    #     """
+    #     Ensure standard p-value results are computed and cached.
 
-        Runs permutation (raw and normalized) and paired t-test p-values
-        so that `.save()` can persist a fully populated instance, even if source data were dropped.
-        """
-        self.get_pvalues(permutation=True, norm=False, verbose=verbose)
-        self.get_pvalues(permutation=True, norm=True, verbose=verbose)
-        self.get_pvalues(permutation=False, verbose=verbose)
+    #     Runs permutation (raw and normalized) and paired t-test p-values
+    #     so that `.save()` can persist a fully populated instance, even if source data were dropped.
+    #     """
+    #     self.get_pvalues(permutation=True, norm=False, verbose=verbose)
+    #     self.get_pvalues(permutation=True, norm=True, verbose=verbose)
+    #     self.get_pvalues(permutation=False, verbose=verbose)
 
     def save(self, path: Union[str, Path], ensure_results: bool = True) -> None:
         """
         Pickle the mapconn instance to a file.
         """
 
-        if ensure_results:
-            self._ensure_results()
+        # if ensure_results:
+        #     self._ensure_results()
 
         path = Path(path)
         save_gzip = path.suffix == ".gz"
@@ -1295,12 +1326,17 @@ class MapConnInv:
         dtype: Optional[Union[np.dtype, type]] = None,
         n_jobs: Optional[int] = None,
         get_stats: bool = True,
-        get_pvalues: bool = False,
+        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
     ) -> "MapConnInv":
         """
         Create a MapConnInv instance from an "original" MapConn instance.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Creating MapConnInv from MapConn instance (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         # checks
         if not isinstance(mapconn_instance, MapConn):
@@ -1350,7 +1386,8 @@ class MapConnInv:
             dtype=dtype,
             n_perm=n_perm,
             get_stats=get_stats,
-            get_pvalues=get_pvalues,
+            # get_pvalues=get_pvalues, # experimental
+            verbose=verbose,
         )
 
     @classmethod
@@ -1368,7 +1405,7 @@ class MapConnInv:
         conn_aggregation: ConnAggregation = "mean",
         map_data_inverted: Optional[pd.DataFrame] = None,
         get_stats: bool = True,
-        get_pvalues: bool = False,
+        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -1377,6 +1414,11 @@ class MapConnInv:
         """
         Create an instance of MapConnInv from flattened connectivity matrices.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Creating MapConnInv from flat connectivity matrices (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         if percentiles is None:
             percentiles = np.arange(0, 100, 5)
@@ -1402,7 +1444,7 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            get_pvalues=get_pvalues,
+            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1424,7 +1466,7 @@ class MapConnInv:
         conn_aggregation: ConnAggregation = "mean",
         map_data_inverted: Optional[pd.DataFrame] = None,
         get_stats: bool = True,
-        get_pvalues: bool = False,
+        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -1433,6 +1475,11 @@ class MapConnInv:
         """
         Create an instance of MapConnInv from connectivity matrices.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Flattening connectivity matrices to create MapConnInv (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         if percentiles is None:
             percentiles = np.arange(0, 100, 5)
@@ -1458,7 +1505,7 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            get_pvalues=get_pvalues,
+            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1490,6 +1537,11 @@ class MapConnInv:
         """
         Create an instance of MapConnInv from time series data.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Calculating connectivity matrices to create MapConnInv (n_jobs={n_jobs}, dtype={dtype})"
+            )
 
         if percentiles is None:
             percentiles = np.arange(0, 100, 5)
@@ -1516,7 +1568,7 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            get_pvalues=get_pvalues,
+            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1543,13 +1595,19 @@ class MapConnNull:
         distmat: Optional[np.ndarray] = None,
         n_jobs: int = -1,
         dtype: Union[np.dtype, type] = np.float32,
-        get_results: bool = False,
+        get_results: bool = True,
+        verbose: bool = True,
     ) -> None:
         """
         Initialize a MapConnNull instance.
 
         Stores null maps/curves and derived null distributions.
         """
+        _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Initializing MapConnNull (n_nulls={n_nulls}, n_jobs={n_jobs}, dtype={dtype})"
+            )
         self._mapconn_instance = mapconn_instance
         self._map_data_null = map_data_null
         self._mapconn_null_curves = mapconn_null_curves
@@ -1561,7 +1619,7 @@ class MapConnNull:
         self._distmat = distmat
         self._dtype = dtype
         self._n_jobs = n_jobs
-
+        self._verbose = verbose
         # delta stats-related
         self._mapconn_inverted_null_curves = None
         self._mapconn_inverted_null_stats = None
@@ -2198,8 +2256,6 @@ class MapConnNull:
                 mapconn_stats = self._mapconn_instance.get_stats(**get_stats_kwargs)
             else:
                 mapconn_stats = self._mapconn_instance.get_inverted_stats(**get_stats_kwargs)
-            # elif direction == "delta":
-            #     mapconn_stats = self._mapconn_instance.get_delta_stats(**get_stats_kwargs)
 
             # get null mapconn stats
             mapconn_null_stats = self.get_null_stats(**get_stats_kwargs)
@@ -2207,7 +2263,7 @@ class MapConnNull:
             # iterate over stats
             for stat in set(stats).intersection(set(mapconn_stats.keys())):
 
-                # original
+                # observed
                 obs = np.array(mapconn_stats[stat])
                 if p_from_mean:
                     obs = obs.mean(axis=0, keepdims=True)
@@ -2706,8 +2762,11 @@ class MapConnNull:
         - l2rmap: left-to-right mapping for parcellation, necessary for above arguments 2-3 in case of non-symmetric parcellation
         - parc_symmetric: whether parcellation is symmetric, set to True to enable above arguments 1-3 without l2rmap
         """
-
         _ensure_logging(verbose)
+        if verbose:
+            logger.info(
+                f"Creating MapConnNull instance from {type(mapconn_instance).__name__} instance (n_nulls={n_nulls}, dype={dtype}, n_jobs={n_jobs})"
+            )
 
         # checks and handle MapConnInv
         if not isinstance(mapconn_instance, (MapConn, MapConnInv)):
@@ -2811,6 +2870,7 @@ class MapConnNull:
             n_jobs=n_jobs,
             dtype=dtype,
             get_results=get_results,
+            verbose=verbose,
         )
 
 
