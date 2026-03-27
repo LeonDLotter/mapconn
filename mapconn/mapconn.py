@@ -2736,7 +2736,7 @@ class MapConnNull:
     def from_mapconn(
         cls,
         mapconn_instance: Union["MapConn", "MapConnInv"],
-        map_data_null: Optional[List[np.ndarray]] = None,
+        map_data_null: Optional[Dict[str, np.ndarray]] = None,
         parcellation: Optional[Any] = None,
         parcellation_space: str = "mni152",
         distmat: Optional[np.ndarray] = None,
@@ -2822,6 +2822,7 @@ class MapConnNull:
 
         # get null data
         if map_data_null is None:
+            logger.info("Generating null maps")
             map_data_null, distmat = generate_null_maps(
                 data=map_data,
                 parcellation=parcellation,
@@ -2834,10 +2835,12 @@ class MapConnNull:
                 dtype=dtype,
                 **null_kwargs,
             )
-            map_data_null = [
-                np.stack([map_data_null[m][i, :] for m in map_data_null.keys()], dtype=dtype)
-                for i in range(n_nulls)
-            ]
+        else:
+            logger.info("Using provided null maps")
+        map_data_null = [
+            np.stack([map_data_null[m][i, :] for m in map_data_null.keys()], dtype=dtype)
+            for i in range(n_nulls)
+        ]
 
         # get null mapconn curves
         mapconn_null_curves = Parallel(n_jobs=n_jobs)(
