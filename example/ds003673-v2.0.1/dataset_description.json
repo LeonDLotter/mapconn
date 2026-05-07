@@ -1,0 +1,24 @@
+{
+    "Name": "Yale Resting State fMRI/Pupillometry: Arousal Study",
+    "BIDSVersion": "1.2.0",
+    "License": "CC0",
+    "Authors": [
+        "Kangjoo Lee",
+        "Corey Horien",
+        "David O'Connor",
+        "Bronwen Garand-Sheridan",
+        "Fuyuze Tokoglu",
+        "Dustin Scheinost",
+        "Evelyn MR Lake",
+        "Todd R Constable"
+    ],
+    "Funding": [],
+    "HowToAcknowledge": "",
+    "EthicsApprovals": [
+        "This study was approved by the Institutional Review Board at Yale University. "
+    ],
+    "ReferencesAndLinks": [
+        "Kangjoo Lee, Corey Horien, David O\u2019Connor, Bronwen Garand-Sheridan, Fuyuze Tokoglu, Dustin Scheinost, Evelyn M.R. Lake, R. Todd Constable, \u201cArousal impacts distributed hubs modulating the integration of brain functional connectivity\u201d, Neuroimage (2022), https://doi.org/10.1016/j.neuroimage.2022.119364"
+    ],
+    "DatasetDOI": "doi:10.18112/openneuro.ds003673.v2.0.1"
+}
