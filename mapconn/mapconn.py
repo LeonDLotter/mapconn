@@ -11,9 +11,8 @@ import xarray as xr
 from joblib import Parallel, delayed
 from nilearn.connectome import vec_to_sym_matrix
 from nispace.nulls import generate_null_maps
-from nispace.stats.effectsize import cohen_paired
-from nispace.stats.misc import null_to_p, permute_groups
-from scipy.stats import median_abs_deviation, ttest_rel
+from nispace.stats.misc import null_to_p
+from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
 from .constants import STATS, MapPctThreshold
@@ -723,7 +722,9 @@ class MapConn(_PickleMixin):
 
         # get parcel labels from DataFrame columns if available
         if parcel_labels is None:
-            if isinstance(connectivity_matrices, list) and isinstance(connectivity_matrices[0], pd.DataFrame):
+            if isinstance(connectivity_matrices, list) and isinstance(
+                connectivity_matrices[0], pd.DataFrame
+            ):
                 parcel_labels = connectivity_matrices[0].columns.to_list()
             elif isinstance(connectivity_matrices, pd.DataFrame):
                 parcel_labels = connectivity_matrices.columns.to_list()
@@ -2404,7 +2405,10 @@ class MapConnNull(_PickleMixin):
                 source = "inverted" if inverted else "observed"
                 logger.info(
                     "Pre-computing p-values (%d/%d): level=%s, source=%s",
-                    i + 1, len(combinations), level, source,
+                    i + 1,
+                    len(combinations),
+                    level,
+                    source,
                 )
                 try:
                     self.get_pvalues(
@@ -2538,9 +2542,7 @@ class MapConnNull(_PickleMixin):
         mappct_thresh = mapconn_instance._mappct_thresh
 
         # settings for null generation
-        null_kwargs = {
-            "method": "moran"
-        } | kwargs
+        null_kwargs = {"method": "moran"} | kwargs
 
         # get null data
         if map_data_null is None:

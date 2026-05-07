@@ -7,7 +7,6 @@ from nilearn.connectome import sym_matrix_to_vec, vec_to_sym_matrix
 from .matrix import _sym_matrix_shape_from_n_tri_elem
 
 
-
 # convert flat mappercentile data to parcel-format data
 def _mappct_flat_to_parcels(
     mappct_data_flat: pd.DataFrame, parcel_labels: Optional[Sequence[Any]] = None
