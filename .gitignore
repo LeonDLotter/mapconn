@@ -3,8 +3,11 @@
 # private files/folders
 _*/
 */_archive/
-test_mapconn.ipynb
 mapconn/spin.py
+
+# folders with example files
+example/NKI_*
+example/test_mapconn.ipynb
 
 ## OSX ################################
 

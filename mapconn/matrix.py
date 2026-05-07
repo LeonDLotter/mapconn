@@ -144,7 +144,7 @@ def _vectorize_sym_matrices(
     sym_matrices: Union[np.ndarray, Sequence[np.ndarray]], discard_diagonal: bool = True
 ) -> np.ndarray:
     """Vectorize a list/array of symmetric matrices."""
-    return np.array([sym_matrix_to_vec(m, discard_diagonal=discard_diagonal) for m in sym_matrices])
+    return np.array([sym_matrix_to_vec(np.asarray(m), discard_diagonal=discard_diagonal) for m in sym_matrices])
 
 
 # spatial autocorrelation of a connectivity matrix

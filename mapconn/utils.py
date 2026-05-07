@@ -7,25 +7,6 @@ from nilearn.connectome import sym_matrix_to_vec, vec_to_sym_matrix
 from .matrix import _sym_matrix_shape_from_n_tri_elem
 
 
-def over(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
-    """Return elementwise comparison array1 > array2."""
-    return array1 > array2
-
-
-def overequal(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
-    """Return elementwise comparison array1 >= array2."""
-    return array1 >= array2
-
-
-def below(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
-    """Return elementwise comparison array1 < array2."""
-    return array1 < array2
-
-
-def belowequal(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
-    """Return elementwise comparison array1 <= array2."""
-    return array1 <= array2
-
 
 # convert flat mappercentile data to parcel-format data
 def _mappct_flat_to_parcels(

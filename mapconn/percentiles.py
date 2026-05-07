@@ -1,18 +1,16 @@
 import logging
-from typing import Literal, Optional, Sequence, Tuple, Union
+import operator
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from nilearn.connectome import sym_matrix_to_vec
 from scipy.stats import percentileofscore
 
+from .constants import MapPctThreshold
 from .matrix import _n_sym_matrix_tri_elem_from_shape
-from .utils import below, belowequal, over, overequal
 
 logger = logging.getLogger(__name__)
-
-
-MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
 
 
 def _calc_mappct_masks(
@@ -47,15 +45,14 @@ def _calc_mappct_masks(
 
     # threshold function
     threshold_funs = {
-        "over": over,
-        "overequal": overequal,
-        "below": below,
-        "belowequal": belowequal,
+        "over": operator.gt,
+        "overequal": operator.ge,
+        "below": operator.lt,
+        "belowequal": operator.le,
     }
-    if pct_threshold in threshold_funs:
-        threshold_fun = threshold_funs[pct_threshold]
-    else:
+    if pct_threshold not in threshold_funs:
         raise ValueError(f"Invalid threshold function '{pct_threshold}'")
+    threshold_fun = threshold_funs[pct_threshold]
 
     # calculate map percentiles
     if not map_data_is_pct:
@@ -82,25 +79,17 @@ def _calc_mappct_masks(
     # calculate masks: array with shape (n_maps * n_percentiles, n_parcels)
     mappct_masks_flat = []
     for i_map in range(n_maps):
-        # tmp = np.full((n_percentiles, n_parcels), False)
         tmp_flat = np.full((n_percentiles, n_parcels_flat), False)
         for i_pct, pct in enumerate(percentiles):
             v = threshold_fun(map_data_arr[i_map, :], pct)
-            # tmp[i_pct, :] = v
             tmp_flat[i_pct, :] = sym_matrix_to_vec(np.outer(v, v), discard_diagonal=True)
-        # mappct_masks.append(tmp)
         mappct_masks_flat.append(tmp_flat)
-    # mappct_masks_arr = np.concatenate(mappct_masks, axis=0)
     mappct_masks_flat_arr = np.concatenate(mappct_masks_flat, axis=0, dtype=bool)
 
     # to df and return
     if return_df:
         out = (
             pd.DataFrame(map_data_arr, index=map_data.index, columns=map_data.columns, dtype=dtype),
-            # pd.DataFrame(
-            #     mappct_masks_arr,
-            #     index=pd.MultiIndex.from_product([map_data.index, percentiles], names=["map", "pct"])
-            # ),
             pd.DataFrame(
                 mappct_masks_flat_arr,
                 index=pd.MultiIndex.from_product(

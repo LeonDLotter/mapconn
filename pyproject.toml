@@ -17,7 +17,7 @@ dependencies = [
 	"nibabel",
 	"nilearn",
 	"pingouin",
-	"nispace @ git+https://github.com/leondlotter/nispace@5470ca5cb68d8cce3100a014d1a4adfb32f92306",
+	"nispace @ git+https://github.com/leondlotter/nispace@4d78c1c9f6e3b0dee113f801af180e3547ff4d1a",
 	"scikit-learn",
 	"joblib",
 	"tqdm",

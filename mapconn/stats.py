@@ -56,7 +56,7 @@ def _calc_mapconn_stats(
 
     # calculate stats
     out = {stat: pd.DataFrame(index=ids, columns=maps) for stat in stats}
-    if any(["=" in stat for stat in stats]):
+    if any("=" in stat for stat in stats):
         stats_pct = [stat for stat in stats if stat.startswith("pct==")]
         stats_auc_thresh = [stat for stat in stats if stat.startswith("auc<=")]
         stats_auc2_thresh = [stat for stat in stats if stat.startswith("auc2<=")]

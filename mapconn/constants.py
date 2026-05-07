@@ -1,3 +1,7 @@
+from typing import Literal
+
+MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
+
 STATS = [
     "auc",
     "auc2",

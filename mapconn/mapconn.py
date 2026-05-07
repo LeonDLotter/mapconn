@@ -16,7 +16,7 @@ from nispace.stats.misc import null_to_p, permute_groups
 from scipy.stats import median_abs_deviation, ttest_rel
 from tqdm import tqdm
 
-from .constants import STATS
+from .constants import STATS, MapPctThreshold
 from .matrix import (
     _get_matrix_estimator,
     _n_sym_matrix_tri_elem_from_shape,
@@ -44,10 +44,32 @@ def _ensure_logging(verbose: bool) -> None:
 
 
 ConnAggregation = Literal["mean", "median"]
-MapPctThreshold = Literal["over", "overequal", "below", "belowequal"]
 
 
-class MapConn:
+class _PickleMixin:
+    def save(self, path: Union[str, Path]) -> None:
+        """Pickle the instance to a file (gzip if path ends with .gz)."""
+        path = Path(path)
+        if path.suffix == ".gz":
+            with gzip.open(path, "wb", compresslevel=9) as f:
+                pickle.dump(self, f)
+        else:
+            with open(path, "wb") as f:
+                pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]):
+        """Load a pickled instance from a file."""
+        path = Path(path)
+        if path.suffix == ".gz":
+            with gzip.open(path, "rb") as f:
+                return pickle.load(f)
+        else:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+
+
+class MapConn(_PickleMixin):
     """
     Class for storing and analyzing map-connectivity ("NEOFC") data.
     """
@@ -311,22 +333,15 @@ class MapConn:
             stats = [stats]
         if not all(stat in STATS for stat in stats):
             raise ValueError(f"stats must be one or more of {STATS}, got {stats}")
-        # get stats
         mapconn_stats = self._mapconn_stats
-        # recalculate
         if (
             mapconn_stats is None
             or recalculate
             or any(stat not in mapconn_stats.keys() for stat in stats)
         ):
             recalculate = True
-        # maybe recalculate
-        elif mapconn_stats is not None:
-            # get mapconn curves for reference
+        else:
             mapconn_curves = self.get_curves(maps=maps, percentiles=percentiles, ids=ids)
-            # check if all stats and data are available
-            if not all(stat in mapconn_stats.keys() for stat in stats):
-                recalculate = True
             if not np.array_equal(mapconn_stats[stats[0]].index, mapconn_curves.index):
                 recalculate = True
             if not np.array_equal(
@@ -560,33 +575,6 @@ class MapConn:
             df = reduce_df_index(df)
         return df
 
-    def save(self, path: Union[str, Path]) -> None:
-        """
-        Pickle the mapconn instance to a file.
-        """
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "wb", compresslevel=9) as f:
-                pickle.dump(self, f)
-        else:
-            with open(path, "wb") as f:
-                pickle.dump(self, f)
-
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> "MapConn":
-        """
-        Load the mapconn instance from a pickled file.
-        """
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "rb") as f:
-                return pickle.load(f)
-        else:
-            with open(path, "rb") as f:
-                return pickle.load(f)
-
     @classmethod
     def from_flat_matrix(
         cls,
@@ -733,9 +721,11 @@ class MapConn:
         conn_data_flat = _vectorize_sym_matrices(connectivity_matrices, discard_diagonal=True)
         conn_data_flat = conn_data_flat.astype(dtype)
 
-        # get parcel labels
+        # get parcel labels from DataFrame columns if available
         if parcel_labels is None:
-            if isinstance(connectivity_matrices, pd.DataFrame):
+            if isinstance(connectivity_matrices, list) and isinstance(connectivity_matrices[0], pd.DataFrame):
+                parcel_labels = connectivity_matrices[0].columns.to_list()
+            elif isinstance(connectivity_matrices, pd.DataFrame):
                 parcel_labels = connectivity_matrices.columns.to_list()
 
         # return MAPCONN object
@@ -804,10 +794,11 @@ class MapConn:
                     np.array(timeseries_data[i, :, :]) for i in range(timeseries_data.shape[0])
                 ]
 
-        # z standardize
+        # z standardize per parcel (axis=0 = time axis)
         if zscore:
             timeseries_data = [
-                (timeseries_data[i] - np.mean(timeseries_data[i])) / np.std(timeseries_data[i])
+                (timeseries_data[i] - np.mean(timeseries_data[i], axis=0))
+                / np.std(timeseries_data[i], axis=0)
                 for i in range(len(timeseries_data))
             ]
 
@@ -855,7 +846,7 @@ class MapConn:
         return cls.from_matrix(
             connectivity_matrices=conn_data,
             matrix_ids=timeseries_ids,
-            r_to_z=True if connectivity_estimator["normalize"] else False,
+            r_to_z=connectivity_estimator["normalize"],
             map_data=map_data,
             map_data_is_pct=map_data_is_pct,
             flat_mappercentile_masks=flat_mappercentile_masks,
@@ -869,7 +860,7 @@ class MapConn:
         )
 
 
-class MapConnInv:
+class MapConnInv(_PickleMixin):
     """
     Class for the mapconn inverted test.
     """
@@ -879,13 +870,11 @@ class MapConnInv:
         mapconn_instance: Optional["MapConn"] = None,
         mapconn_inverted_instance: Optional["MapConn"] = None,
         mapconn_pvalues_perm: Optional[Dict[str, pd.DataFrame]] = None,
-        mapconn_pvalues_perm_norm: Optional[Dict[str, pd.DataFrame]] = None,
         mapconn_pvalues_ttest: Optional[Dict[str, pd.DataFrame]] = None,
         n_jobs: int = -1,
         n_perm: int = 10000,
         dtype: Union[np.dtype, type] = np.float32,
         get_stats: bool = False,
-        # get_pvalues: bool = False, # experimental
         verbose: bool = True,
     ) -> None:
         """
@@ -899,7 +888,6 @@ class MapConnInv:
         self._mapconn_instance = mapconn_instance
         self._mapconn_inverted_instance = mapconn_inverted_instance
         self._mapconn_pvalues_perm = mapconn_pvalues_perm
-        self._mapconn_pvalues_perm_norm = mapconn_pvalues_perm_norm
         self._mapconn_pvalues_ttest = mapconn_pvalues_ttest
         self._dtype = dtype
         self._n_jobs = n_jobs
@@ -908,11 +896,6 @@ class MapConnInv:
         # precompute
         if get_stats:
             self.get_stats()
-        # experimental
-        # if get_pvalues:
-        #     self.get_pvalues(permutation=True, norm=False, n_perm=n_perm)
-        #     self.get_pvalues(permutation=True, norm=True, n_perm=n_perm)
-        #     self.get_pvalues(permutation=False)
 
     def get_original(self) -> "MapConn":
         """
@@ -1026,197 +1009,6 @@ class MapConnInv:
         """
         return self._mapconn_instance.get_matrix_sac(ids=ids, distmat=distmat, **kwargs)
 
-    def get_pvalues(
-        self,
-        stats: Optional[Union[str, Sequence[str]]] = None,
-        maps: Optional[Sequence[Any]] = None,
-        percentiles: Optional[Sequence[float]] = None,
-        ids: Optional[Sequence[Any]] = None,
-        permutation: Union[bool, str] = True,
-        norm: bool = False,
-        n_perm: Optional[int] = None,
-        n_jobs: int = -1,
-        perm_strategy: str = "proportional",
-        tail: str = "upper",
-        recalculate: bool = False,
-        force_dict: bool = False,
-        seed: Optional[int] = None,
-        verbose: bool = False,
-    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-        """
-        Calculate p-values comparing original vs inverted curves.
-
-        Returns DataFrame(s) indexed by statistic (rows) and maps (columns).
-        """
-        raise NotImplementedError(
-            "MapConnInv.get_pvalues() is an experimental function and should not be used yet."
-        )
-
-        _ensure_logging(verbose)
-
-        # check number of fc matrices
-        if len(self._mapconn_instance._ids) < 2:
-            raise ValueError(
-                "We need at least two input matrices to compute p-values, because p values "
-                "are calculated as permutation or paired t-tests between original and inverted curves."
-            )
-
-        # n_perm
-        if n_perm is None:
-            n_perm = self._n_perm
-
-        # stats
-        if stats is None:
-            stats = "auc"
-        if stats == "all":
-            stats = STATS
-        elif isinstance(stats, str):
-            stats = [stats]
-
-        # get stored pvalues (can be None)
-        if permutation:
-            if norm:
-                pvalues = self._mapconn_pvalues_perm_norm
-            else:
-                pvalues = self._mapconn_pvalues_perm
-        else:
-            pvalues = self._mapconn_pvalues_ttest
-
-        # check if recalculate is needed
-        if pvalues is None or recalculate or (any(stat not in pvalues.keys() for stat in stats)):
-            recalculate = True
-        elif pvalues is not None:
-            # check if all stats and data are available
-            if not all(stat in pvalues.keys() for stat in stats):
-                recalculate = True
-            # get original mapconn stats for reference
-            mapconn_stats = self._mapconn_instance.get_stats(
-                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
-            )
-            # check if columns are the same
-            if not np.array_equal(pvalues[stats[0]].columns, mapconn_stats[stats[0]].columns):
-                recalculate = True
-
-        # recalculate if needed
-        if recalculate:
-            pvalues = {}
-
-            # get original mapconn stats
-            mapconn_stats = self._mapconn_instance.get_stats(
-                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
-            )
-
-            # get inverted mapconn stats
-            mapconn_inverted_stats = self._mapconn_inverted_instance.get_stats(
-                stats=stats, maps=maps, percentiles=percentiles, ids=ids, force_dict=True
-            )
-
-            # number of "subjects"
-            n = mapconn_stats[stats[0]].shape[0]
-
-            # prep permutation
-            if permutation is True:
-                permutation = "label"
-            if permutation == "label":
-                # "groups"
-                groups = np.concatenate([np.zeros(n), np.ones(n)])
-                subjects = (
-                    mapconn_stats[stats[0]].index.to_list()
-                    + mapconn_stats[stats[0]].index.to_list()
-                )
-
-                # permuted groups
-                groups_perm = permute_groups(
-                    groups,
-                    subjects=subjects,
-                    paired=True,
-                    strategy=perm_strategy,
-                    n_perm=n_perm,
-                    n_proc=n_jobs,
-                    seed=seed,
-                    verbose=verbose,
-                )
-            elif permutation == "sign":
-                rng = np.random.RandomState(seed)
-                signs_perm = [rng.choice([-1, 1], size=n) for _ in range(n_perm)]
-
-            # iterate over stats
-            for stat in set(stats).intersection(set(mapconn_stats.keys())):
-
-                # original
-                original = mapconn_stats[stat]
-                # inverted
-                inverted = mapconn_inverted_stats[stat]
-                # maps
-                maps = mapconn_stats[stat].columns
-
-                # calculate p-values
-                if permutation:
-                    pvalues_stat = pd.DataFrame(columns=maps, index=["stat", "p"])
-                    # iterate over maps
-                    for m in tqdm(maps, desc="Calculating p-values", disable=not verbose):
-
-                        if permutation == "label":
-                            # data
-                            data = np.concatenate([original[m].values, inverted[m].values])
-                            # original
-                            d_original = cohen_paired(data[groups == 0], data[groups == 1])
-                            # null
-                            d_null = [cohen_paired(data[g == 0], data[g == 1]) for g in groups_perm]
-
-                        elif permutation == "sign":
-                            # original
-                            diff = original[m].values - inverted[m].values
-                            d_original = np.mean(diff) / np.std(diff, ddof=1)
-
-                            # null
-                            d_null = [
-                                np.mean(diff * s) / np.std(diff * s, ddof=1) for s in signs_perm
-                            ]
-
-                        # p-value
-                        pvalues_stat.loc["stat", m] = d_original
-                        pvalues_stat.loc["p", m] = null_to_p(
-                            test_value=d_original, null_array=d_null, tail=tail, fit_norm=norm
-                        )
-                else:
-                    # ttest
-                    ttest = ttest_rel(
-                        original,
-                        inverted,
-                        axis=0,
-                        nan_policy="raise",
-                        alternative=(
-                            "greater"
-                            if tail == "upper"
-                            else "less" if tail == "lower" else "two-sided"
-                        ),
-                    )
-                    # result
-                    pvalues_stat = pd.DataFrame(
-                        {"stat": ttest.statistic, "p": ttest.pvalue}, index=maps
-                    ).T
-
-                # store
-                pvalues[stat] = pvalues_stat
-
-            # store
-            if permutation:
-                if norm:
-                    self._mapconn_pvalues_perm_norm = pvalues
-                else:
-                    self._mapconn_pvalues_perm = pvalues
-            else:
-                self._mapconn_pvalues_ttest = pvalues
-
-        # return
-        pvalues = {stat: pvalues[stat] for stat in stats}
-        if not force_dict:
-            if len(pvalues.keys()) == 1:
-                pvalues = pvalues[stats[0]]
-
-        return pvalues
-
     def get_summary(
         self,
         level: str = "group",
@@ -1275,48 +1067,6 @@ class MapConnInv:
             df = reduce_df_index(df)
         return df
 
-    # def _ensure_results(self, verbose: bool = False) -> None:
-    #     """
-    #     Ensure standard p-value results are computed and cached.
-
-    #     Runs permutation (raw and normalized) and paired t-test p-values
-    #     so that `.save()` can persist a fully populated instance, even if source data were dropped.
-    #     """
-    #     self.get_pvalues(permutation=True, norm=False, verbose=verbose)
-    #     self.get_pvalues(permutation=True, norm=True, verbose=verbose)
-    #     self.get_pvalues(permutation=False, verbose=verbose)
-
-    def save(self, path: Union[str, Path], ensure_results: bool = True) -> None:
-        """
-        Pickle the mapconn instance to a file.
-        """
-
-        # if ensure_results:
-        #     self._ensure_results()
-
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "wb", compresslevel=9) as f:
-                pickle.dump(self, f)
-        else:
-            with open(path, "wb") as f:
-                pickle.dump(self, f)
-
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> "MapConnInv":
-        """
-        Load the mapconn instance from a pickled file.
-        """
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "rb") as f:
-                return pickle.load(f)
-        else:
-            with open(path, "rb") as f:
-                return pickle.load(f)
-
     @classmethod
     def from_mapconn(
         cls,
@@ -1326,7 +1076,6 @@ class MapConnInv:
         dtype: Optional[Union[np.dtype, type]] = None,
         n_jobs: Optional[int] = None,
         get_stats: bool = True,
-        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
     ) -> "MapConnInv":
         """
@@ -1386,7 +1135,6 @@ class MapConnInv:
             dtype=dtype,
             n_perm=n_perm,
             get_stats=get_stats,
-            # get_pvalues=get_pvalues, # experimental
             verbose=verbose,
         )
 
@@ -1405,7 +1153,6 @@ class MapConnInv:
         conn_aggregation: ConnAggregation = "mean",
         map_data_inverted: Optional[pd.DataFrame] = None,
         get_stats: bool = True,
-        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -1444,7 +1191,6 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1466,7 +1212,6 @@ class MapConnInv:
         conn_aggregation: ConnAggregation = "mean",
         map_data_inverted: Optional[pd.DataFrame] = None,
         get_stats: bool = True,
-        # get_pvalues: bool = False, # experimental
         n_perm: int = 10000,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -1505,7 +1250,6 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1528,7 +1272,6 @@ class MapConnInv:
         conn_aggregation: ConnAggregation = "mean",
         map_data_inverted: Optional[pd.DataFrame] = None,
         get_stats: bool = True,
-        get_pvalues: bool = False,
         n_perm: int = 10000,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -1568,7 +1311,6 @@ class MapConnInv:
             mapconn_instance=mapconn_instance,
             map_data_inverted=map_data_inverted,
             get_stats=get_stats,
-            # get_pvalues=get_pvalues, # experimental
             n_perm=n_perm,
             n_jobs=n_jobs,
             verbose=verbose,
@@ -1576,7 +1318,7 @@ class MapConnInv:
         )
 
 
-class MapConnNull:
+class MapConnNull(_PickleMixin):
     """
     Class for generating null distributions of map connectivity data.
     """
@@ -1596,6 +1338,8 @@ class MapConnNull:
         n_jobs: int = -1,
         dtype: Union[np.dtype, type] = np.float32,
         get_results: bool = True,
+        compute_pvalues: bool = False,
+        compute_delta: bool = False,
         verbose: bool = True,
     ) -> None:
         """
@@ -1634,7 +1378,7 @@ class MapConnNull:
 
         # precompute
         if get_results:
-            self._ensure_results(include_delta=isinstance(self._mapconn_instance, MapConnInv))
+            self._ensure_results(include_pvalues=compute_pvalues, include_delta=compute_delta)
 
     def get_original(self) -> Union["MapConn", "MapConnInv"]:
         """
@@ -2187,7 +1931,6 @@ class MapConnNull:
         ids: Optional[Sequence[Any]] = None,
         p_from_mean: bool = True,
         inverted: bool = False,
-        norm: bool = False,
         tail: str = "upper",
         recalculate: bool = False,
         n_jobs: Optional[int] = None,
@@ -2217,10 +1960,8 @@ class MapConnNull:
 
         # get stored pvalues (can be None)
         level_key = "group" if p_from_mean else "individual"
-        d = "exact" if not norm else "norm"
         m = "obs" if not inverted else "inv"
-        t = tail
-        pvalues_key = f"map-{m}_level-{level_key}_dist-{d}_tail-{t}"
+        pvalues_key = f"map-{m}_level-{level_key}_tail-{tail}"
         pvalues = self._mapconn_pvalues.get(pvalues_key, None)
 
         # kwargs to load stats
@@ -2280,7 +2021,7 @@ class MapConnNull:
                         test_value=obs[i_idx, i_m],
                         null_array=null[:, i_idx, i_m],
                         tail=tail,
-                        fit_norm=norm,
+                        fit_norm=False,
                     )
                     for i_idx, idx in enumerate(ids)
                     for i_m, m in enumerate(maps)
@@ -2508,13 +2249,12 @@ class MapConnNull:
                     )
 
                     # p values
-                    for p in ["p", "pz"]:
+                    for p in ["p"]:
                         df.append(
                             self.get_pvalues(
                                 stats=stat,
                                 p_from_mean=False,
                                 inverted=True if metric == "inverted" else False,
-                                norm=True if p == "pz" else False,
                                 **get_kwargs,
                             )
                             .reset_index(names="id")
@@ -2553,12 +2293,11 @@ class MapConnNull:
 
                     # p values
                     if not metric == "delta":
-                        for p in ["p", "pz"]:
+                        for p in ["p"]:
                             df.append(
                                 self.get_pvalues(
                                     stats=stat,
                                     inverted=True if metric == "inverted" else False,
-                                    norm=True if p == "pz" else False,
                                     **get_kwargs,
                                 )
                                 .assign(curve_stat=stat, metric=metric, variable=p)
@@ -2642,6 +2381,7 @@ class MapConnNull:
     def _ensure_results(
         self,
         stats: Optional[Union[str, Sequence[str]]] = None,
+        include_pvalues: bool = False,
         include_delta: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -2655,28 +2395,40 @@ class MapConnNull:
         # TODO: add delta stats
         if stats is None:
             stats = "auc"
+        logger.info("Pre-computing stats")
         self.get_stats(stats=stats)
-        for p_from_mean, norm, inverted in product([True, False], [True, False], [True, False]):
-            try:
-                self.get_pvalues(
-                    stats=stats,
-                    p_from_mean=p_from_mean,
-                    norm=norm,
-                    inverted=inverted,
+        if include_pvalues:
+            combinations = list(product([True, False], [True, False]))
+            for i, (p_from_mean, inverted) in enumerate(combinations):
+                level = "group" if p_from_mean else "individual"
+                source = "inverted" if inverted else "observed"
+                logger.info(
+                    "Pre-computing p-values (%d/%d): level=%s, source=%s",
+                    i + 1, len(combinations), level, source,
                 )
-            except AttributeError:
-                pass
+                try:
+                    self.get_pvalues(
+                        stats=stats,
+                        p_from_mean=p_from_mean,
+                        inverted=inverted,
+                    )
+                except AttributeError:
+                    pass
+        logger.info("Pre-computing null curve distributions")
         self.get_null_curves_dist()
+        logger.info("Pre-computing null stats distributions")
         self.get_null_stats_dist(dist_stats_from_mean=True, stats=stats)
         self.get_null_stats_dist(dist_stats_from_mean=False, stats=stats)
 
-        # TODO: handle delta stats better
-        try:
-            self.get_delta_pvalues(stats=stats, verbose=verbose)
-            self.get_delta_null_stats_dist(dist_stats_from_mean=True, stats=stats)
-            self.get_delta_null_stats_dist(dist_stats_from_mean=False, stats=stats)
-        except Exception:
-            pass
+        if include_delta:
+            try:
+                logger.info("Pre-computing delta p-values")
+                self.get_delta_pvalues(stats=stats, verbose=verbose)
+                logger.info("Pre-computing delta null stats distributions")
+                self.get_delta_null_stats_dist(dist_stats_from_mean=True, stats=stats)
+                self.get_delta_null_stats_dist(dist_stats_from_mean=False, stats=stats)
+            except Exception:
+                pass
 
     def drop_nulls(
         self,
@@ -2691,7 +2443,7 @@ class MapConnNull:
         if stats is None:
             stats = "auc"
         if ensure_results:
-            self._ensure_results(include_delta=True, stats=stats)
+            self._ensure_results(include_pvalues=True, include_delta=True, stats=stats)
 
         self._map_data_null = None
         self._mapconn_null_curves = None
@@ -2703,34 +2455,10 @@ class MapConnNull:
     def save(
         self, path: Union[str, Path], drop_nulls: bool = True, ensure_results: bool = True
     ) -> None:
-        """
-        Pickle the mapconn instance to a file.
-        """
+        """Pickle the instance to a file, optionally dropping null data first."""
         if drop_nulls:
             self.drop_nulls(ensure_results=ensure_results)
-
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "wb", compresslevel=9) as f:
-                pickle.dump(self, f)
-        else:
-            with open(path, "wb") as f:
-                pickle.dump(self, f)
-
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> "MapConnNull":
-        """
-        Load the mapconn instance from a pickled file.
-        """
-        path = Path(path)
-        save_gzip = path.suffix == ".gz"
-        if save_gzip:
-            with gzip.open(path, "rb") as f:
-                return pickle.load(f)
-        else:
-            with open(path, "rb") as f:
-                return pickle.load(f)
+        super().save(path)
 
     @classmethod
     def from_mapconn(
@@ -2747,6 +2475,8 @@ class MapConnNull:
         null_verbose: bool = False,
         dtype: Optional[Union[np.dtype, type]] = None,
         get_results: bool = True,
+        compute_pvalues: bool = True,
+        compute_delta: bool = False,
         **kwargs,
     ) -> "MapConnNull":
         """
@@ -2809,15 +2539,7 @@ class MapConnNull:
 
         # settings for null generation
         null_kwargs = {
-            "method": "moran",
-            "lr_mirror_dist_mat": False,
-            "lr_mirror_null_maps": False,
-            "match_interhemi_correlation": False,
-            "l2rmap": None,
-            "parc_idc_lh": None,
-            "parc_idc_rh": None,
-            "parc_idc_sc": None,
-            "cx_sc_minmax_scale": False,
+            "method": "moran"
         } | kwargs
 
         # get null data
@@ -2873,6 +2595,8 @@ class MapConnNull:
             n_jobs=n_jobs,
             dtype=dtype,
             get_results=get_results,
+            compute_pvalues=compute_pvalues,
+            compute_delta=compute_delta,
             verbose=verbose,
         )
 
