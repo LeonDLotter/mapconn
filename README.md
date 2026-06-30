@@ -20,7 +20,7 @@ For the full methodological description, validation, and applications, see the p
 pip install git+https://github.com/leondlotter/mapconn
 ```
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.10. Installation typically completes in under 2 minutes.
 
 ## Quick start
 
