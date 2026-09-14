@@ -60,9 +60,20 @@ def _calc_mapconn_stats(
         stats_pct = [stat for stat in stats if stat.startswith("pct==")]
         stats_auc_thresh = [stat for stat in stats if stat.startswith("auc<=")]
         stats_auc2_thresh = [stat for stat in stats if stat.startswith("auc2<=")]
+        stats_auc_abs_thresh = [stat for stat in stats if stat.startswith("auc_abs<=")]
+        stats_auc_pos_thresh = [stat for stat in stats if stat.startswith("auc_pos<=")]
+        stats_auc_neg_thresh = [stat for stat in stats if stat.startswith("auc_neg<=")]
         stats_poly2_thresh = [stat for stat in stats if stat.startswith("poly2<=")]
     else:
-        stats_auc_thresh, stats_auc2_thresh, stats_poly2_thresh, stats_pct = [], [], [], []
+        (
+            stats_auc_thresh,
+            stats_auc2_thresh,
+            stats_auc_abs_thresh,
+            stats_auc_pos_thresh,
+            stats_auc_neg_thresh,
+            stats_poly2_thresh,
+            stats_pct,
+        ) = ([], [], [], [], [], [], [])
     for m, curve in curves_mapwise.items():
 
         # remove global
@@ -102,6 +113,63 @@ def _calc_mapconn_stats(
                 idx_bool = percentiles <= float(stat.split("=")[1]) / 100
                 out[stat][m] = np.apply_along_axis(
                     fast_auc2,
+                    axis=1,
+                    arr=curve.values[:, idx_bool],
+                    percentiles=percentiles[idx_bool],
+                )
+
+        # AUC absolute
+        if "auc_abs" in stats:
+            out["auc_abs"][m] = np.apply_along_axis(
+                fast_auc_abs,
+                axis=1,
+                arr=curve,
+                percentiles=percentiles,
+            )
+        # AUC absolute with percentile restriction
+        if stats_auc_abs_thresh:
+            for stat in stats_auc_abs_thresh:
+                idx_bool = percentiles <= float(stat.split("=")[1]) / 100
+                out[stat][m] = np.apply_along_axis(
+                    fast_auc_abs,
+                    axis=1,
+                    arr=curve.values[:, idx_bool],
+                    percentiles=percentiles[idx_bool],
+                )
+
+        # AUC positive part
+        if "auc_pos" in stats:
+            out["auc_pos"][m] = np.apply_along_axis(
+                fast_auc_pos,
+                axis=1,
+                arr=curve,
+                percentiles=percentiles,
+            )
+        # AUC positive part with percentile restriction
+        if stats_auc_pos_thresh:
+            for stat in stats_auc_pos_thresh:
+                idx_bool = percentiles <= float(stat.split("=")[1]) / 100
+                out[stat][m] = np.apply_along_axis(
+                    fast_auc_pos,
+                    axis=1,
+                    arr=curve.values[:, idx_bool],
+                    percentiles=percentiles[idx_bool],
+                )
+
+        # AUC negative part
+        if "auc_neg" in stats:
+            out["auc_neg"][m] = np.apply_along_axis(
+                fast_auc_neg,
+                axis=1,
+                arr=curve,
+                percentiles=percentiles,
+            )
+        # AUC negative part with percentile restriction
+        if stats_auc_neg_thresh:
+            for stat in stats_auc_neg_thresh:
+                idx_bool = percentiles <= float(stat.split("=")[1]) / 100
+                out[stat][m] = np.apply_along_axis(
+                    fast_auc_neg,
                     axis=1,
                     arr=curve.values[:, idx_bool],
                     percentiles=percentiles[idx_bool],
@@ -190,6 +258,51 @@ def fast_auc2(curve: Union[pd.Series, np.ndarray], percentiles: Sequence[float])
     curve = curve[~isnan]
     curve = np.tanh(curve)
     curve = curve**2 * np.sign(curve)
+
+    # handle percentiles
+    percentiles = np.asarray(percentiles)
+    percentiles = percentiles[~isnan]
+
+    return np.trapz(curve, x=percentiles)
+
+
+def fast_auc_abs(curve: Union[pd.Series, np.ndarray], percentiles: Sequence[float]) -> float:
+    """Compute trapezoidal AUC of the absolute curve ignoring NaNs."""
+    # handle curve
+    curve = np.asarray(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
+    curve = np.abs(curve)
+
+    # handle percentiles
+    percentiles = np.asarray(percentiles)
+    percentiles = percentiles[~isnan]
+
+    return np.trapz(curve, x=percentiles)
+
+
+def fast_auc_pos(curve: Union[pd.Series, np.ndarray], percentiles: Sequence[float]) -> float:
+    """Compute trapezoidal AUC of the positive part of the curve ignoring NaNs."""
+    # handle curve
+    curve = np.asarray(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
+    curve = np.clip(curve, 0, None)
+
+    # handle percentiles
+    percentiles = np.asarray(percentiles)
+    percentiles = percentiles[~isnan]
+
+    return np.trapz(curve, x=percentiles)
+
+
+def fast_auc_neg(curve: Union[pd.Series, np.ndarray], percentiles: Sequence[float]) -> float:
+    """Compute trapezoidal AUC of the negative part of the curve ignoring NaNs."""
+    # handle curve
+    curve = np.asarray(curve)
+    isnan = np.isnan(curve)
+    curve = curve[~isnan]
+    curve = np.clip(curve, None, 0)
 
     # handle percentiles
     percentiles = np.asarray(percentiles)
