@@ -1365,9 +1365,11 @@ class MapConnNull(_PickleMixin):
         self._dtype = dtype
         self._n_jobs = n_jobs
         self._verbose = verbose
-        # delta stats-related
+        # inverted- and delta stats-related
         self._mapconn_inverted_null_curves = None
         self._mapconn_inverted_null_stats = None
+        self._mapconn_inverted_null_stats_dist_group = None
+        self._mapconn_inverted_null_stats_dist_indiv = None
         self._mapconn_pvalues_delta = None
         self._mapconn_delta_null_stats_dist_group = None
         self._mapconn_delta_null_stats_dist_indiv = None
@@ -1489,6 +1491,8 @@ class MapConnNull(_PickleMixin):
         if not inverted:
             null_curves = self._mapconn_null_curves
         else:
+            if self._mapconn_inverted_null_curves is None and self._map_data_null is not None:
+                self._compute_inverted_null_curves()
             null_curves = self._mapconn_inverted_null_curves
         if null_curves is None:
             raise AttributeError(
@@ -1517,6 +1521,74 @@ class MapConnNull(_PickleMixin):
                     pd.DataFrame(arr, index=obs_sel.index, columns=obs_sel.columns) for arr in null
                 ]
         return null
+
+    def _compute_inverted_null_curves(
+        self,
+        n_jobs: Optional[int] = None,
+        verbose: Optional[bool] = None,
+        null_verbose: bool = False,
+    ) -> None:
+        """
+        Compute mapconn curves for the inverted null maps and store them.
+
+        The observed inverted map is a reflection of the original map about its mean. Since
+        inversion commutes with the null-generating transformation (e.g., spin rotation), the
+        matching null for the inverted map is the identically inverted null maps. Using the
+        original null curves for inverted stats is NOT equivalent: the AUC null depends on the
+        spatial shape of the tested (upper) tail, which differs between upper and lower tails.
+
+        Note: if the MapConnInv instance was created with custom `map_data_inverted` that is not
+        a reflection of the original map data, these inverted nulls do not match it.
+        """
+        if not isinstance(self._mapconn_instance, MapConnInv):
+            raise AttributeError(
+                "Inverted null curves require a MapConnNull instance created from a MapConnInv instance"
+            )
+        if self._map_data_null is None:
+            raise AttributeError("Null maps not available. Have they been dropped?")
+        if n_jobs is None:
+            n_jobs = self._n_jobs
+        if verbose is None:
+            verbose = self._verbose
+
+        # original MapConn instance
+        mapconn_instance = self._mapconn_instance.get_original()
+
+        # inverted null maps (same reflection as applied to the observed map data)
+        if verbose:
+            logger.info("Calculating inverted null maps")
+        map_data_null_inverted = []
+        for arr in self._map_data_null:
+            arr_mean = np.nanmean(arr)
+            map_data_null_inverted.append((arr - arr_mean) * (-1) + arr_mean)
+
+        # null mapconn curves (full maps and percentiles, as for original null curves)
+        flat_connectivity_matrices = mapconn_instance.get_connectivity_matrices(flat=True)
+        self._mapconn_inverted_null_curves = Parallel(n_jobs=n_jobs)(
+            delayed(calculate_mapconn)(
+                flat_connectivity_matrices,
+                map_data=map_data_null_i,
+                map_data_is_pct=False,
+                percentiles=mapconn_instance._percentiles,
+                return_mappct=False,
+                return_df=False,
+                r_to_z=mapconn_instance._r_to_z,
+                conn_agg=mapconn_instance._conn_agg,
+                mappercentile_threshold=mapconn_instance._mappct_thresh,
+                n_jobs=1,
+                verbose=null_verbose,
+                dtype=mapconn_instance._dtype,
+            )
+            for map_data_null_i in tqdm(
+                map_data_null_inverted,
+                disable=not verbose,
+                desc="Calculating inverted null mapconn curves",
+            )
+        )
+        # invalidate derived inverted null results
+        self._mapconn_inverted_null_stats = None
+        self._mapconn_inverted_null_stats_dist_group = None
+        self._mapconn_inverted_null_stats_dist_indiv = None
 
     def get_null_curves_dist(
         self,
@@ -1717,6 +1789,7 @@ class MapConnNull(_PickleMixin):
         dist_stats_quantiles: Optional[Sequence[float]] = None,
         force_dict: bool = False,
         null_stats_dict: Optional[Dict[str, List[pd.DataFrame]]] = None,
+        inverted: bool = False,
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
         Get distribution statistics for null curve statistics.
@@ -1724,6 +1797,7 @@ class MapConnNull(_PickleMixin):
         If `dist_stats_from_mean=True`, statistics are computed on the
         mean across ids for each null. Returns DataFrame(s) with maps as
         columns and distribution metrics as the index (and optionally id).
+        If `inverted=True`, the distribution of the inverted null stats is returned.
         """
         if stats is None:
             stats = "auc"
@@ -1732,10 +1806,14 @@ class MapConnNull(_PickleMixin):
         if isinstance(stats, str):
             stats = [stats]
 
-        if dist_stats_from_mean:
-            mapconn_null_stats_dist = self._mapconn_null_stats_dist_group
-        else:
-            mapconn_null_stats_dist = self._mapconn_null_stats_dist_indiv
+        # cache attribute (getattr for backwards compatibility with older pickles)
+        level = "group" if dist_stats_from_mean else "indiv"
+        cache_attr = (
+            f"_mapconn_null_stats_dist_{level}"
+            if not inverted
+            else f"_mapconn_inverted_null_stats_dist_{level}"
+        )
+        mapconn_null_stats_dist = getattr(self, cache_attr, None)
 
         # check stat
         if mapconn_null_stats_dist is not None:
@@ -1754,6 +1832,7 @@ class MapConnNull(_PickleMixin):
                     ids=ids,
                     recalculate=recalculate == "all",
                     force_dict=True,
+                    inverted=inverted,
                 )
             else:
                 mapconn_null_stats = null_stats_dict
@@ -1792,18 +1871,12 @@ class MapConnNull(_PickleMixin):
 
             # store
             if null_stats_dict is None:
-                if dist_stats_from_mean:
-                    self._mapconn_null_stats_dist_group = null_dist
-                else:
-                    self._mapconn_null_stats_dist_indiv = null_dist
+                setattr(self, cache_attr, null_dist)
             else:
                 return null_dist
 
         # return
-        if dist_stats_from_mean:
-            mapconn_null_stats_dist = self._mapconn_null_stats_dist_group
-        else:
-            mapconn_null_stats_dist = self._mapconn_null_stats_dist_indiv
+        mapconn_null_stats_dist = getattr(self, cache_attr)
         if maps is None:
             maps = mapconn_null_stats_dist[stats[0]].columns
         dist_stats = (
@@ -1999,8 +2072,8 @@ class MapConnNull(_PickleMixin):
             else:
                 mapconn_stats = self._mapconn_instance.get_inverted_stats(**get_stats_kwargs)
 
-            # get null mapconn stats
-            mapconn_null_stats = self.get_null_stats(**get_stats_kwargs)
+            # get null mapconn stats (inverted observed stats are tested against inverted nulls)
+            mapconn_null_stats = self.get_null_stats(**get_stats_kwargs, inverted=inverted)
 
             # iterate over stats
             for stat in set(stats).intersection(set(mapconn_stats.keys())):
@@ -2063,7 +2136,9 @@ class MapConnNull(_PickleMixin):
         # TODO: add p value options: norm, not norm, tails (?), individual, group
         """
         Get permuted p-values for delta statistics.
-        Will re-run null analysis, so takes as much time as "fitting" of the model did.
+        Requires inverted null curves; if not yet computed (e.g., by get_pvalues(inverted=True)),
+        the null analysis is re-run for inverted null maps, which takes as much time as "fitting"
+        of the model did.
         """
         _ensure_logging(verbose)
         if not isinstance(self._mapconn_instance, MapConnInv):
@@ -2126,53 +2201,13 @@ class MapConnNull(_PickleMixin):
         if percentiles is None:
             percentiles = mapconn_instance._percentiles
 
-        # get null maps
-        map_data_null = self._map_data_null
-        n_nulls = len(map_data_null)
+        n_nulls = len(self._map_data_null)
 
-        # calculate inverted null maps
-        if verbose:
-            logger.info("Calculating inverted null maps")
-        map_data_null_inverted = []
-        for arr in map_data_null:
-            arr_mean = np.nanmean(arr)
-            arr = (arr - arr_mean) * (-1) + arr_mean
-            map_data_null_inverted.append(arr)
-
-        # rerun null analysis
-        # get null mapconn curves
-        flat_connectivity_matrices = mapconn_instance.get_connectivity_matrices(flat=True)
-        r_to_z = mapconn_instance._r_to_z
-        conn_agg = mapconn_instance._conn_agg
-        mappct_thresh = mapconn_instance._mappct_thresh
-        dtype = mapconn_instance._dtype
-        null_curves_inverted = Parallel(n_jobs=n_jobs)(
-            delayed(calculate_mapconn)(
-                flat_connectivity_matrices,
-                map_data=map_data_null_i,
-                map_data_is_pct=False,
-                percentiles=percentiles,
-                return_mappct=False,
-                return_df=False,
-                r_to_z=r_to_z,
-                conn_agg=conn_agg,
-                mappercentile_threshold=mappct_thresh,
-                n_jobs=1,
-                verbose=null_verbose,
-                dtype=dtype,
+        # inverted null curves (computed once, shared with get_pvalues(inverted=True))
+        if self._mapconn_inverted_null_curves is None or recalculate:
+            self._compute_inverted_null_curves(
+                n_jobs=n_jobs, verbose=verbose, null_verbose=null_verbose
             )
-            for map_data_null_i in tqdm(
-                map_data_null_inverted,
-                disable=not verbose,
-                desc="Calculating inverted null mapconn curves",
-            )
-        )
-        # save
-        self._mapconn_inverted_null_curves = null_curves_inverted
-        # get null curves for inverted curves
-        null_curves_inverted = self.get_null_curves(
-            maps=maps, percentiles=percentiles, ids=ids, inverted=True
-        )
 
         # calculate null delta stats
         if verbose:
@@ -2264,11 +2299,22 @@ class MapConnNull(_PickleMixin):
                         )
 
                     # null distribution
-                    if metric in ["original", "delta"]:
+                    if metric in ["original", "inverted", "delta"]:
                         if metric == "original":
                             tmp = self.get_null_stats_dist(
                                 dist_stats_from_mean=False, stats=stat, **get_kwargs
                             )
+                        elif metric == "inverted":
+                            try:
+                                tmp = self.get_null_stats_dist(
+                                    dist_stats_from_mean=False,
+                                    stats=stat,
+                                    inverted=True,
+                                    **get_kwargs,
+                                )
+                            except AttributeError as e:
+                                logger.warning(f"Inverted null distribution not available: {e}")
+                                continue
                         else:
                             try:
                                 tmp = self.get_delta_null_stats_dist(
@@ -2313,9 +2359,17 @@ class MapConnNull(_PickleMixin):
                             )
 
                     # null distribution
-                    if metric in ["original", "delta"]:
+                    if metric in ["original", "inverted", "delta"]:
                         if metric == "original":
                             tmp = self.get_null_stats_dist(stats=stat, **get_kwargs)
+                        elif metric == "inverted":
+                            try:
+                                tmp = self.get_null_stats_dist(
+                                    stats=stat, inverted=True, **get_kwargs
+                                )
+                            except AttributeError as e:
+                                logger.warning(f"Inverted null distribution not available: {e}")
+                                continue
                         else:
                             try:
                                 tmp = self.get_delta_null_stats_dist(stats=stat, **get_kwargs)
@@ -2334,7 +2388,8 @@ class MapConnNull(_PickleMixin):
         var_order = df.index.get_level_values("variable").unique().to_list()
         for stat in stats:
             for metric in metrics:
-                metric_null = "original" if metric != "delta" else "delta"
+                # each metric is standardized against its own null (original / inverted / delta)
+                metric_null = metric
                 if level == "group":
                     mean = df.loc[(stat, metric, "mean"), :]
                     try:
@@ -2423,6 +2478,13 @@ class MapConnNull(_PickleMixin):
         logger.info("Pre-computing null stats distributions")
         self.get_null_stats_dist(dist_stats_from_mean=True, stats=stats)
         self.get_null_stats_dist(dist_stats_from_mean=False, stats=stats)
+        if include_pvalues and isinstance(self._mapconn_instance, MapConnInv):
+            logger.info("Pre-computing inverted null stats distributions")
+            try:
+                self.get_null_stats_dist(dist_stats_from_mean=True, stats=stats, inverted=True)
+                self.get_null_stats_dist(dist_stats_from_mean=False, stats=stats, inverted=True)
+            except AttributeError:
+                pass
 
         if include_delta:
             try:
