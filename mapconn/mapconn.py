@@ -25,7 +25,13 @@ from .matrix import (
 )
 from .percentiles import _calc_mappct_masks
 from .stats import _calc_mapconn_stats, _remove_global
-from .utils import _construct_flat_label_pairs, _mappct_flat_to_parcels, reduce_df_index
+from .utils import (
+    _construct_flat_label_pairs,
+    _format_map_data,
+    _format_map_data_null,
+    _mappct_flat_to_parcels,
+    reduce_df_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -597,7 +603,8 @@ class MapConn(_PickleMixin):
 
         Parameters:
         - `flat_connectivity_matrices`: array/DataFrame with shape $(n_{ids}, n_{edges})$.
-        - `map_data`: array/DataFrame with shape $(n_{maps}, n_{parcels})$.
+        - `map_data`: array/DataFrame with shape $(n_{maps}, n_{parcels})$, or a single map as
+            1D array/Series. Maps without names are named "map1", "map2", ...
         - `percentiles`: values in $[0, 100]$ used to compute masks.
         """
         _ensure_logging(verbose)
@@ -636,6 +643,12 @@ class MapConn(_PickleMixin):
         flat_connectivity_matrices = pd.DataFrame(
             flat_connectivity_matrices, index=matrix_ids, dtype=dtype
         )
+
+        # map data to DataFrame (n_maps, n_parcels)
+        if map_data is not None:
+            map_data = _format_map_data(
+                map_data, parcel_labels=parcel_labels, n_parcels=len(parcel_labels)
+            )
 
         # Compute mapconn curves using the flat connectivity data and map data or mappercentile data
         mapconn_curves, mappct_data, flat_mappercentile_masks = calculate_mapconn(
@@ -1111,6 +1124,23 @@ class MapConnInv(_PickleMixin):
             map_data_mean = np.nanmean(map_data)
             map_data_inverted = (map_data - map_data_mean) * (-1) + map_data_mean
             map_data_inverted = map_data_inverted.T
+        else:
+            map_data_inverted = _format_map_data(
+                map_data_inverted, parcel_labels=list(map_data.columns), n_parcels=map_data.shape[1]
+            )
+            if map_data_inverted.shape != map_data.shape:
+                raise ValueError(
+                    f"map_data_inverted shape {map_data_inverted.shape} does not match "
+                    f"map data shape {map_data.shape}"
+                )
+            if set(map_data_inverted.index) == set(map_data.index):
+                # same map names: align order
+                map_data_inverted = map_data_inverted.loc[map_data.index]
+            else:
+                # otherwise assume same order as original maps
+                map_data_inverted = pd.DataFrame(
+                    map_data_inverted.values, index=map_data.index, columns=map_data.columns
+                )
 
         # run
         mapconn_inverted = MapConn.from_flat_matrix(
@@ -1860,14 +1890,25 @@ class MapConnNull(_PickleMixin):
                     null_dist[stat].loc["mad"] = median_abs_deviation(null_mean, axis=0)
                 else:
                     # null for each id/subject
-                    null_dist[stat] = {}
-                    for i, id in enumerate(ids):
+                    dfs = []
+                    for i in range(len(ids)):
                         n = null[:, i, :]
-                        null_dist[stat][id] = pd.DataFrame(n, columns=maps).describe(
-                            percentiles=dist_stats_quantiles
-                        )
-                        null_dist[stat][id].loc["mad"] = median_abs_deviation(n, axis=0)
-                    null_dist[stat] = pd.concat(null_dist[stat], names=["id", "variable"])
+                        d = pd.DataFrame(n, columns=maps).describe(percentiles=dist_stats_quantiles)
+                        d.loc["mad"] = median_abs_deviation(n, axis=0)
+                        dfs.append(d)
+                    # build (id, variable) index explicitly: pd.concat with a dict would split
+                    # tuple ids into multiple index levels
+                    variables = dfs[0].index
+                    id_level = pd.Index(
+                        [id for id in ids for _ in variables], tupleize_cols=False, name="id"
+                    )
+                    null_dist[stat] = pd.DataFrame(
+                        np.concatenate([d.values for d in dfs], axis=0),
+                        index=pd.MultiIndex.from_arrays(
+                            [id_level, np.tile(variables, len(ids))], names=["id", "variable"]
+                        ),
+                        columns=maps,
+                    )
 
             # store
             if null_stats_dict is None:
@@ -2417,11 +2458,12 @@ class MapConnNull(_PickleMixin):
                     df = pd.concat(
                         [
                             df,
+                            # rename only the variable level (other levels may hold tuple ids)
                             ((val - null_mean.values) / null_std.values).rename(
-                                index={"val": "val_z"}
+                                index={"val": "val_z"}, level="variable"
                             ),
                             ((val - null_med.values) / (1.4826 * null_mad.values)).rename(
-                                index={"val": "val_rz"}
+                                index={"val": "val_rz"}, level="variable"
                             ),
                         ]
                     )
@@ -2623,6 +2665,7 @@ class MapConnNull(_PickleMixin):
             )
         else:
             logger.info("Using provided null maps")
+            map_data_null, n_nulls = _format_map_data_null(map_data_null, map_data, n_nulls)
         map_data_null = [
             np.stack([map_data_null[m][i, :] for m in map_data_null.keys()], dtype=dtype)
             for i in range(n_nulls)
@@ -2707,8 +2750,7 @@ def calculate_mapconn(
             "conn_data must be a 2D array (flattened lower triangle of matrix/matrices)"
         )
     if map_data is not None:
-        if map_data.ndim != 2:
-            raise ValueError("map_data must be a 2D array")
+        map_data = _format_map_data(map_data, as_df=return_df)
         if conn_data_flat.shape[1] != _n_sym_matrix_tri_elem_from_shape(map_data.shape[1]):
             raise ValueError(
                 "flat_connectivity_matrices and map_data must have corresponding number of columns. "

@@ -9,6 +9,7 @@ from scipy.stats import percentileofscore
 
 from .constants import MapPctThreshold
 from .matrix import _n_sym_matrix_tri_elem_from_shape
+from .utils import _format_map_data
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,9 @@ def _calc_mappct_masks(
     """
     if percentiles is None:
         percentiles = np.arange(0, 100, 5)
-    # data
-    if map_data.ndim == 1:
-        map_data_arr = np.atleast_2d(map_data)
-    elif map_data.ndim == 2:
-        map_data_arr = np.array(map_data)
-    else:
-        raise ValueError("map_data must be a 1D or 2D array")
+    # data: (n_maps, n_parcels); DataFrame needed for labels if return_df
+    map_data = _format_map_data(map_data, as_df=return_df)
+    map_data_arr = np.array(map_data)
     if verbose:
         logger.info(
             "Got map data with %s maps and %s values", map_data_arr.shape[0], map_data_arr.shape[1]

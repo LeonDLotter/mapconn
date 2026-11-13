@@ -14,48 +14,7 @@ import pytest
 
 from mapconn import MapConn, MapConnInv, MapConnNull
 
-N_PARCELS = 60
-N_SUBJECTS = 4
-N_NULLS = 40
 STAT = "auc"
-
-
-@pytest.fixture(scope="module")
-def toy_data():
-    rng = np.random.default_rng(0)
-    parcels = [f"p{i}" for i in range(N_PARCELS)]
-
-    # parcels on a ring; FC decays with ring distance, plus a shared non-stationary component
-    # and subject-specific noise
-    pos = np.arange(N_PARCELS)
-    d = np.abs(pos[:, None] - pos[None, :])
-    d = np.minimum(d, N_PARCELS - d)
-    shared = rng.normal(0, 0.3, (N_PARCELS, N_PARCELS))
-    shared = (shared + shared.T) / 2
-    conn = []
-    for _ in range(N_SUBJECTS):
-        noise = rng.normal(0, 0.1, (N_PARCELS, N_PARCELS))
-        c = np.exp(-d / 4) * 0.8 + shared + (noise + noise.T) / 2
-        np.fill_diagonal(c, 1)
-        conn.append(np.clip(c, -0.99, 0.99))
-    conn = np.stack(conn)
-
-    # skewed maps: compact upper tail (one bump), diffuse lower tail
-    def bump(center, width):
-        dc = np.minimum(np.abs(pos - center), N_PARCELS - np.abs(pos - center))
-        return np.exp(-(dc**2) / (2 * width**2))
-
-    maps = {
-        "mapA": np.exp(3 * bump(15, 3.5)) + rng.normal(0, 0.05, N_PARCELS),
-        "mapB": np.exp(2 * bump(45, 6)) + rng.normal(0, 0.05, N_PARCELS),
-    }
-    map_data = pd.DataFrame(maps, index=parcels).T  # (n_maps, n_parcels)
-
-    # nulls: circular shifts (ring analogue of spins)
-    shifts = rng.choice(np.arange(1, N_PARCELS), N_NULLS, replace=False)
-    nulls = {m: np.stack([np.roll(v, s) for s in shifts]) for m, v in maps.items()}
-
-    return conn, map_data, nulls
 
 
 def _kwargs():
@@ -71,7 +30,6 @@ def models(toy_data):
     null_inv = MapConnNull.from_mapconn(
         mc_inv,
         map_data_null=nulls,
-        n_nulls=N_NULLS,
         n_jobs=1,
         verbose=False,
         dtype=np.float64,
@@ -84,7 +42,6 @@ def models(toy_data):
     null_neg = MapConnNull.from_mapconn(
         mc_neg,
         map_data_null={m: -v for m, v in nulls.items()},
-        n_nulls=N_NULLS,
         n_jobs=1,
         verbose=False,
         dtype=np.float64,
